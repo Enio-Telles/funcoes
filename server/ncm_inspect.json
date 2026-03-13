@@ -1,0 +1,94 @@
+{
+  "schema": "Schema([('Codigo_NCM', String), ('Capitulo', String), ('Descr_Capitulo', String), ('Posicao', String), ('Descr_Posicao', String), ('Descricao', String), ('Data_Inicio', String), ('Data_Fim', String), ('Ato_Legal', String)])",
+  "count": 10000,
+  "sample_2208": [
+    {
+      "Codigo_NCM": "2208.20.00",
+      "Capitulo": "22",
+      "Descr_Capitulo": "Bebidas, líquidos alcoólicos e vinagres.",
+      "Posicao": "2208",
+      "Descr_Posicao": null,
+      "Descricao": "- Aguardentes de vinho ou de bagaço, de uvas",
+      "Data_Inicio": "01/04/2022",
+      "Data_Fim": "31/12/9999",
+      "Ato_Legal": "Res Camex 272 2021"
+    },
+    {
+      "Codigo_NCM": "2208.30",
+      "Capitulo": "22",
+      "Descr_Capitulo": "Bebidas, líquidos alcoólicos e vinagres.",
+      "Posicao": "2208",
+      "Descr_Posicao": null,
+      "Descricao": "- Uísques",
+      "Data_Inicio": "01/04/2022",
+      "Data_Fim": "31/12/9999",
+      "Ato_Legal": "Res Camex 272 2021"
+    },
+    {
+      "Codigo_NCM": "2208.30.20",
+      "Capitulo": "22",
+      "Descr_Capitulo": "Bebidas, líquidos alcoólicos e vinagres.",
+      "Posicao": "2208",
+      "Descr_Posicao": null,
+      "Descricao": "Em embalagens de capacidade inferior ou igual a 2 l",
+      "Data_Inicio": "01/04/2022",
+      "Data_Fim": "31/12/9999",
+      "Ato_Legal": "Res Camex 272 2021"
+    },
+    {
+      "Codigo_NCM": "2208.30.90",
+      "Capitulo": "22",
+      "Descr_Capitulo": "Bebidas, líquidos alcoólicos e vinagres.",
+      "Posicao": "2208",
+      "Descr_Posicao": null,
+      "Descricao": "Outros",
+      "Data_Inicio": "01/04/2022",
+      "Data_Fim": "31/12/9999",
+      "Ato_Legal": "Res Camex 272 2021"
+    },
+    {
+      "Codigo_NCM": "2208.50.00",
+      "Capitulo": "22",
+      "Descr_Capitulo": "Bebidas, líquidos alcoólicos e vinagres.",
+      "Posicao": "2208",
+      "Descr_Posicao": null,
+      "Descricao": "- Gim e genebra",
+      "Data_Inicio": "01/04/2022",
+      "Data_Fim": "31/12/9999",
+      "Ato_Legal": "Res Camex 272 2021"
+    },
+    {
+      "Codigo_NCM": "2208.60.00",
+      "Capitulo": "22",
+      "Descr_Capitulo": "Bebidas, líquidos alcoólicos e vinagres.",
+      "Posicao": "2208",
+      "Descr_Posicao": null,
+      "Descricao": "- Vodca",
+      "Data_Inicio": "01/04/2022",
+      "Data_Fim": "31/12/9999",
+      "Ato_Legal": "Res Camex 272 2021"
+    },
+    {
+      "Codigo_NCM": "2208.70.00",
+      "Capitulo": "22",
+      "Descr_Capitulo": "Bebidas, líquidos alcoólicos e vinagres.",
+      "Posicao": "2208",
+      "Descr_Posicao": null,
+      "Descricao": "- Licores",
+      "Data_Inicio": "01/04/2022",
+      "Data_Fim": "31/12/9999",
+      "Ato_Legal": "Res Camex 272 2021"
+    },
+    {
+      "Codigo_NCM": "2208.90.00",
+      "Capitulo": "22",
+      "Descr_Capitulo": "Bebidas, líquidos alcoólicos e vinagres.",
+      "Posicao": "2208",
+      "Descr_Posicao": null,
+      "Descricao": "- Outros",
+      "Data_Inicio": "01/04/2022",
+      "Data_Fim": "31/12/9999",
+      "Ato_Legal": "Res Camex 272 2021"
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+    "columns": [
+        "chave_produto",
+        "lista_descricao",
+        "lista_codigos",
+        "cods_descr",
+        "requer_revisao_manual",
+        "descricoes_conflitantes",
+        "lista_ncm",
+        "lista_cest",
+        "lista_gtin",
+        "lista_descr_compl_c170",
+        "lista_unid",
+        "lista_tipo_item",
+        "lista_fonte"
+    ],
+    "total_rows": 0,
+    "has_tipo_item_consenso": false,
+    "identity_separation_found": false,
+    "separation_examples": [],
+    "sample": []
+}

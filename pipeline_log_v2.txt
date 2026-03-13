@@ -1,0 +1,79 @@
+Iniciando Processamento Analítico (Streaming Mode): 37671507000187
+=> Escaneando bloco_h: C:\Users\03002693901\OneDrive - SECRETARIA DE ESTADO DE 
+FINANCAS\Desenvolvimento\sefin_audit_2\CNPJ\37671507000187\arquivos_parquet\blo
+co_h_37671507000187.parquet
+=> Escaneando c170: C:\Users\03002693901\OneDrive - SECRETARIA DE ESTADO DE 
+FINANCAS\Desenvolvimento\sefin_audit_2\CNPJ\37671507000187\arquivos_parquet\c17
+0_simplificada_37671507000187.parquet
+=> Escaneando reg_0200: C:\Users\03002693901\OneDrive - SECRETARIA DE ESTADO DE
+FINANCAS\Desenvolvimento\sefin_audit_2\CNPJ\37671507000187\arquivos_parquet\reg
+_0200_37671507000187.parquet
+=> Escaneando NFe: C:\Users\03002693901\OneDrive - SECRETARIA DE ESTADO DE 
+FINANCAS\Desenvolvimento\sefin_audit_2\CNPJ\37671507000187\arquivos_parquet\NFe
+_37671507000187.parquet
+=> Escaneando NFCe: C:\Users\03002693901\OneDrive - SECRETARIA DE ESTADO DE 
+FINANCAS\Desenvolvimento\sefin_audit_2\CNPJ\37671507000187\arquivos_parquet\NFC
+e_37671507000187.parquet
+shape: (5, 17)
+┌───────────┬───────────┬───────────┬───────────┬───┬───────────┬───────────┬──
+─────────┬──────────┐
+│ chave_pro ┆ lista_des ┆ lista_cod ┆ cods_desc ┆ … ┆ lista_des ┆ lista_uni ┆ 
+lista_tip ┆ lista_fo │
+│ duto      ┆ cricao    ┆ igos      ┆ r         ┆   ┆ cr_compl_ ┆ d         ┆ 
+o_item    ┆ nte      │
+│ ---       ┆ ---       ┆ ---       ┆ ---       ┆   ┆ c170      ┆ ---       ┆ 
+---       ┆ ---      │
+│ str       ┆ str       ┆ str       ┆ str       ┆   ┆ ---       ┆ str       ┆ 
+str       ┆ str      │
+│           ┆           ┆           ┆           ┆   ┆ str       ┆           ┆  
+┆          │
+╞═══════════╪═══════════╪═══════════╪═══════════╪═══╪═══════════╪═══════════╪══
+═════════╪══════════╡
+│ 1004_00   ┆ WHISKY JW ┆ 1004      ┆           ┆ … ┆ WHISKY JW ┆ CX        ┆ 
+00        ┆ C170+020 │
+│           ┆ GOLD      ┆           ┆           ┆   ┆ GOLD      ┆           ┆  
+┆ 0        │
+│           ┆ ICONS     ┆           ┆           ┆   ┆ ICONS     ┆           ┆  
+┆          │
+│           ┆ 12750ML   ┆           ┆           ┆   ┆ 12750ML   ┆           ┆  
+┆          │
+│ 1005_00   ┆ WHISKY    ┆ 1005      ┆           ┆ … ┆ WHISKY    ┆ CX        ┆ 
+00        ┆ C170+020 │
+│           ┆ BUCHANANS ┆           ┆           ┆   ┆ BUCHANANS ┆           ┆  
+┆ 0        │
+│           ┆ DELUXE    ┆           ┆           ┆   ┆ DELUXE    ┆           ┆  
+┆          │
+│           ┆ 12750M…   ┆           ┆           ┆   ┆ 12750M…   ┆           ┆  
+┆          │
+│ 1006_00   ┆ F MIGNONA ┆ 1006      ┆           ┆ … ┆ F MIGNONA ┆ KG        ┆ 
+00        ┆ C170+020 │
+│           ┆ PARAS     ┆           ┆           ┆   ┆ PARAS     ┆           ┆  
+┆ 0        │
+│           ┆ 480520DOC ┆           ┆           ┆   ┆ 480520DOC ┆           ┆  
+┆          │
+│ 1007_00   ┆ FILE      ┆ 1007      ┆           ┆ … ┆ FILE      ┆ KG        ┆ 
+00        ┆ C170+020 │
+│           ┆ MIGNON    ┆           ┆           ┆   ┆ MIGNON    ┆           ┆  
+┆ 0        │
+│           ┆ ESTROGONO ┆           ┆           ┆   ┆ ESTROGONO ┆           ┆  
+┆          │
+│           ┆ FE        ┆           ┆           ┆   ┆ FE        ┆           ┆  
+┆          │
+│ 1008_00   ┆ PICANHA   ┆ 1008      ┆           ┆ … ┆ PICANHA   ┆ KG        ┆ 
+00        ┆ C170+020 │
+│           ┆ PECA MP   ┆           ┆           ┆   ┆ PECA MP   ┆           ┆  
+┆ 0        │
+│           ┆ 8001400FA ┆           ┆           ┆   ┆ 8001400FA ┆           ┆  
+┆          │
+│           ┆ RMI       ┆           ┆           ┆   ┆ RMI       ┆           ┆  
+┆          │
+└───────────┴───────────┴───────────┴───────────┴───┴───────────┴───────────┴──
+─────────┴──────────┘
+Sucesso! Base geral gerada com 1157 registos em: C:\Users\03002693901\OneDrive 
+- SECRETARIA DE ESTADO DE 
+FINANCAS\Desenvolvimento\sefin_audit_2\CNPJ\37671507000187\analises\produtos_ag
+regados_37671507000187.parquet
+Atenção: Foram encontrados 70 casos de códigos ambíguos. Ficheiro salvo em: 
+C:\Users\03002693901\OneDrive - SECRETARIA DE ESTADO DE 
+FINANCAS\Desenvolvimento\sefin_audit_2\CNPJ\37671507000187\analises\produtos_RE
+VISAO_MANUAL_37671507000187.csv

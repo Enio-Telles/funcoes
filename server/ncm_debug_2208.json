@@ -1,0 +1,17 @@
+{
+  "exact_2208": [],
+  "with_pos_desc": [],
+  "cap22": [
+    {
+      "Codigo_NCM": "22",
+      "Capitulo": "22",
+      "Descr_Capitulo": "Bebidas, líquidos alcoólicos e vinagres.",
+      "Posicao": "22",
+      "Descr_Posicao": null,
+      "Descricao": "Bebidas, líquidos alcoólicos e vinagres.",
+      "Data_Inicio": "01/04/2022",
+      "Data_Fim": "31/12/9999",
+      "Ato_Legal": "Res Camex 272 2021"
+    }
+  ]
+}

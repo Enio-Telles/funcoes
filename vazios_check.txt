@@ -1,0 +1,1 @@
+unable to find column "tipo_item_consenso"; valid columns: ["chave_produto", "lista_descricao", "lista_codigos", "cods_descr", "requer_revisao_manual", "descricoes_conflitantes", "ncm_consenso", "cest_consenso", "gtin_consenso", "lista_ncm", "lista_cest", "lista_gtin", "lista_descr_compl_c170", "lista_unid", "lista_fonte"]

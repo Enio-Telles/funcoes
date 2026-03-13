@@ -1,0 +1,1 @@
+{"error": "O sistema n\u00e3o pode encontrar o caminho especificado. (os error 3): ...nto/sefin_audit_2/CNPJ/37671507000187/analises/produtos_agregados_37671507000187.parquet (set POLARS_VERBOSE=1 to see full path)\n\nThis error occurred with the following context stack:\n\t[1] 'parquet scan'\n\t[2] 'sink'\n"}

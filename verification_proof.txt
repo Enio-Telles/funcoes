@@ -1,0 +1,8 @@
+Total rows: 4
+
+Rows for P001 (Should be 3):
+{'chave_produto': 'P001_(Vazio)', 'tipo_item_consenso': '(Vazio)', 'ncm_consenso': '12345678', 'lista_fonte': 'NFe'}
+{'chave_produto': 'P001_00', 'tipo_item_consenso': '00', 'ncm_consenso': '12345678', 'lista_fonte': 'C170+0200'}
+{'chave_produto': 'P001_01', 'tipo_item_consenso': '01', 'ncm_consenso': '12345678', 'lista_fonte': 'C170+0200'}
+
+SUCCESS: Identity separation verified!

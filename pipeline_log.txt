@@ -1,0 +1,27 @@
+Iniciando Processamento Analítico (Streaming Mode): 37671507000187
+=> bloco_h não encontrado.
+=> c170 não encontrado.
+=> reg_0200 não encontrado.
+=> NFe não encontrado.
+=> NFCe não encontrado.
+shape: (0, 17)
+┌───────────┬───────────┬───────────┬───────────┬───┬───────────┬───────────┬──
+─────────┬──────────┐
+│ chave_pro ┆ lista_des ┆ lista_cod ┆ cods_desc ┆ … ┆ lista_des ┆ lista_uni ┆ 
+lista_tip ┆ lista_fo │
+│ duto      ┆ cricao    ┆ igos      ┆ r         ┆   ┆ cr_compl_ ┆ d         ┆ 
+o_item    ┆ nte      │
+│ ---       ┆ ---       ┆ ---       ┆ ---       ┆   ┆ c170      ┆ ---       ┆ 
+---       ┆ ---      │
+│ str       ┆ str       ┆ str       ┆ str       ┆   ┆ ---       ┆ str       ┆ 
+str       ┆ str      │
+│           ┆           ┆           ┆           ┆   ┆ str       ┆           ┆  
+┆          │
+╞═══════════╪═══════════╪═══════════╪═══════════╪═══╪═══════════╪═══════════╪══
+═════════╪══════════╡
+└───────────┴───────────┴───────────┴───────────┴───┴───────────┴───────────┴──
+─────────┴──────────┘
+Sucesso! Base geral gerada com 0 registos em: C:\Users\03002693901\OneDrive - 
+SECRETARIA DE ESTADO DE 
+FINANCAS\Desenvolvimento\sefin_audit_2\CNPJ\37671507000187\analises\produtos_ag
+regados_37671507000187.parquet

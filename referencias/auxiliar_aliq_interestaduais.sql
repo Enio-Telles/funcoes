@@ -1,0 +1,1 @@
+select * from qvw.tbl_aliq_ufs;

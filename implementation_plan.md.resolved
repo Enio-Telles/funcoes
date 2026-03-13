@@ -1,0 +1,35 @@
+# Implementation Plan - Fix Database Driver Error
+
+✅ **Status:** Plan implemented. Types check and server start succeeded using `better-sqlite3`. No `@libsql` imports remain in application code.
+
+
+The development server is failing to start because of a missing module in `@libsql/hrana-client` (a dependency of `@libsql/client`). This appears to be a broken ESM build or installation in the current environment (Node 24 on Windows/OneDrive).
+
+## Proposed Changes
+
+### [Component] Database Connection
+
+Since the project is using a local SQLite file (`sefin_audit.db`), we can switch to `better-sqlite3`, which is the industry standard for local SQLite in Node.js and avoids the ESM resolution issues currently plaguing the LibSQL driver.
+
+#### [MODIFY] [package.json](file:///c:/Users/eniot/OneDrive%20-%20SECRETARIA%20DE%20ESTADO%20DE%20FINANCAS/Desenvolvimento/sefin-audit-tool/package.json)
+- Remove `@libsql/client`
+- Add `better-sqlite3`
+- Add `@types/better-sqlite3` as a dev dependency
+
+#### [MODIFY] [server/db.ts](file:///c:/Users/eniot/OneDrive%20-%20SECRETARIA%20DE%20ESTADO%20DE%20FINANCAS/Desenvolvimento/sefin-audit-tool/server/db.ts)
+- Change import from `@libsql/client` to `better-sqlite3`
+- Change drizzle import from `drizzle-orm/libsql` to `drizzle-orm/better-sqlite3`
+- Update [getDb](file:///c:/Users/eniot/OneDrive%20-%20SECRETARIA%20DE%20ESTADO%20DE%20FINANCAS/Desenvolvimento/sefin-audit-tool/server/db.ts#9-26) function to initialize `better-sqlite3`
+
+#### [MODIFY] [drizzle.config.ts](file:///c:/Users/eniot/OneDrive%20-%20SECRETARIA%20DE%20ESTADO%20DE%20FINANCAS/Desenvolvimento/sefin-audit-tool/drizzle.config.ts)
+- Ensure it remains compatible with local SQLite (it already uses `dialect: "sqlite"`)
+
+## Verification Plan
+
+### Automated Tests
+- Run `pnpm run check` to verify type safety and dependency resolution.
+- Run `pnpm run dev` and ensure the server starts without `ERR_MODULE_NOT_FOUND`.
+
+### Manual Verification
+- Verify that the application can connect to the local SQLite database by checking the logs for "[Database] Connected" (or similar success message if implemented).
+- Try to sign in or perform an action that triggers a database query to ensure end-to-end functionality.

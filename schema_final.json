@@ -1,0 +1,19 @@
+{
+    "chave_produto": "String",
+    "lista_descricao": "String",
+    "lista_codigos": "String",
+    "cods_descr": "String",
+    "requer_revisao_manual": "Boolean",
+    "descricoes_conflitantes": "String",
+    "ncm_consenso": "String",
+    "cest_consenso": "String",
+    "gtin_consenso": "String",
+    "tipo_item_consenso": "String",
+    "lista_ncm": "String",
+    "lista_cest": "String",
+    "lista_gtin": "String",
+    "lista_descr_compl_c170": "String",
+    "lista_unid": "String",
+    "lista_tipo_item": "String",
+    "lista_fonte": "String"
+}
