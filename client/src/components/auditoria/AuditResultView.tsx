@@ -1,4 +1,5 @@
-import { ReactNode, useEffect, useState } from "react";
+import { ReactNode, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -45,24 +46,38 @@ function ActionGroup({ title, children }: { title: string; children: ReactNode }
 
 export function AuditResultView({ result, elapsed }: AuditResultViewProps) {
   const [, navigate] = useLocation();
+  const queryClient = useQueryClient();
+  const cleanCnpj = result.cnpj?.replace(/\D/g, "") || "";
   const [downloadingRevisao, setDownloadingRevisao] = useState(false);
   const [downloadMsg, setDownloadMsg] = useState<string | null>(null);
-  const [statusResumo, setStatusResumo] = useState<ProdutoAnaliseStatusResumo | null>(null);
-  const [runtimeStatus, setRuntimeStatus] = useState<{
-    compat_mode: boolean;
-    pipeline_legacy_removed: boolean;
-    files: Record<string, { path: string; exists: boolean; size_bytes?: number }>;
-  } | null>(null);
-  const [vectorStatus, setVectorStatus] = useState<{
-    available: boolean;
-    message: string;
-    model_name?: string;
-    engine?: string | null;
-  } | null>(null);
-  const [vectorCaches, setVectorCaches] = useState<{ semantic?: Record<string, unknown>; hybrid?: Record<string, unknown> } | null>(null);
-  const [currentBaseHash, setCurrentBaseHash] = useState<string | null>(null);
   const [vectorLoading, setVectorLoading] = useState(false);
   const [runtimeLoading, setRuntimeLoading] = useState(false);
+  const statusQuery = useQuery({
+    queryKey: ["audit-produto-status", cleanCnpj],
+    queryFn: () => getStatusAnaliseProdutos(cleanCnpj, { includeData: false }),
+    enabled: Boolean(cleanCnpj),
+    staleTime: 30_000,
+    retry: 1,
+  });
+  const runtimeQuery = useQuery({
+    queryKey: ["audit-produto-runtime", cleanCnpj],
+    queryFn: () => getRuntimeProdutosStatus(cleanCnpj),
+    enabled: Boolean(cleanCnpj),
+    staleTime: 30_000,
+    retry: 1,
+  });
+  const vectorQuery = useQuery({
+    queryKey: ["audit-produto-vector", cleanCnpj],
+    queryFn: () => getVectorizacaoStatus(cleanCnpj),
+    enabled: Boolean(cleanCnpj),
+    staleTime: 30_000,
+    retry: 1,
+  });
+  const statusResumo = (statusQuery.data?.resumo || null) as ProdutoAnaliseStatusResumo | null;
+  const runtimeStatus = runtimeQuery.data?.runtime || null;
+  const vectorStatus = vectorQuery.data?.status || null;
+  const vectorCaches = vectorQuery.data?.caches || null;
+  const currentBaseHash = vectorQuery.data?.current_base_hash || null;
   const vectorEngine = String(vectorStatus?.engine || "").toUpperCase();
   const vectorEngineIsFaiss = vectorEngine === "FAISS";
   const vectorEngineIsNumpy = vectorEngine === "NUMPY";
@@ -77,62 +92,8 @@ export function AuditResultView({ result, elapsed }: AuditResultViewProps) {
           ? "Fallback aceitavel"
           : "Status normal";
 
-  useEffect(() => {
-    let active = true;
-    const cleanCnpj = result.cnpj?.replace(/\D/g, "");
-    if (!cleanCnpj) {
-      setStatusResumo(null);
-      return;
-    }
-
-    getStatusAnaliseProdutos(cleanCnpj, { includeData: false })
-      .then((res) => {
-        if (active) {
-          setStatusResumo(res.resumo || null);
-        }
-      })
-      .catch(() => {
-        if (active) {
-          setStatusResumo(null);
-        }
-      });
-
-    getRuntimeProdutosStatus(cleanCnpj)
-      .then((res) => {
-        if (active) {
-          setRuntimeStatus(res.runtime || null);
-        }
-      })
-      .catch(() => {
-        if (active) {
-          setRuntimeStatus(null);
-        }
-      });
-
-    getVectorizacaoStatus(cleanCnpj)
-      .then((res) => {
-        if (active) {
-          setVectorStatus(res.status || null);
-          setVectorCaches(res.caches || null);
-          setCurrentBaseHash(res.current_base_hash || null);
-        }
-      })
-      .catch(() => {
-        if (active) {
-          setVectorStatus(null);
-          setVectorCaches(null);
-          setCurrentBaseHash(null);
-        }
-      });
-
-    return () => {
-      active = false;
-    };
-  }, [result.cnpj]);
-
   const handleDownloadRevisao = async () => {
-    if (!result.cnpj) return;
-    const cleanCnpj = result.cnpj.replace(/\D/g, "");
+    if (!cleanCnpj) return;
     setDownloadingRevisao(true);
     setDownloadMsg(null);
     try {
@@ -151,35 +112,8 @@ export function AuditResultView({ result, elapsed }: AuditResultViewProps) {
     window.open(url, "_blank");
   };
 
-  const refreshVectorStatus = async () => {
-    if (!result.cnpj) return;
-    const cleanCnpj = result.cnpj.replace(/\D/g, "");
-    try {
-      const res = await getVectorizacaoStatus(cleanCnpj);
-      setVectorStatus(res.status || null);
-      setVectorCaches(res.caches || null);
-      setCurrentBaseHash(res.current_base_hash || null);
-    } catch {
-      setVectorStatus(null);
-      setVectorCaches(null);
-      setCurrentBaseHash(null);
-    }
-  };
-
-  const refreshRuntimeStatus = async () => {
-    if (!result.cnpj) return;
-    const cleanCnpj = result.cnpj.replace(/\D/g, "");
-    try {
-      const res = await getRuntimeProdutosStatus(cleanCnpj);
-      setRuntimeStatus(res.runtime || null);
-    } catch {
-      setRuntimeStatus(null);
-    }
-  };
-
   const handleRecalculateSemantic = async () => {
-    if (!result.cnpj) return;
-    const cleanCnpj = result.cnpj.replace(/\D/g, "");
+    if (!cleanCnpj) return;
     setVectorLoading(true);
     try {
       const res = await getParesGruposSimilares(cleanCnpj, "semantic", true);
@@ -188,7 +122,8 @@ export function AuditResultView({ result, elapsed }: AuditResultViewProps) {
       } else {
         setDownloadMsg("Pares semanticos recalculados");
       }
-      await refreshVectorStatus();
+      await queryClient.invalidateQueries({ queryKey: ["audit-produto-vector", cleanCnpj] });
+      await vectorQuery.refetch();
     } catch (err: any) {
       setDownloadMsg(err?.message || "Erro ao recalcular pares semanticos");
     } finally {
@@ -198,8 +133,7 @@ export function AuditResultView({ result, elapsed }: AuditResultViewProps) {
   };
 
   const handleRecalculateHybrid = async () => {
-    if (!result.cnpj) return;
-    const cleanCnpj = result.cnpj.replace(/\D/g, "");
+    if (!cleanCnpj) return;
     setVectorLoading(true);
     try {
       const res = await getParesGruposSimilares(cleanCnpj, "hybrid", true);
@@ -208,7 +142,8 @@ export function AuditResultView({ result, elapsed }: AuditResultViewProps) {
       } else {
         setDownloadMsg("Pares hibridos recalculados");
       }
-      await refreshVectorStatus();
+      await queryClient.invalidateQueries({ queryKey: ["audit-produto-vector", cleanCnpj] });
+      await vectorQuery.refetch();
     } catch (err: any) {
       setDownloadMsg(err?.message || "Erro ao recalcular pares hibridos");
     } finally {
@@ -218,13 +153,13 @@ export function AuditResultView({ result, elapsed }: AuditResultViewProps) {
   };
 
   const handleClearVectorCache = async () => {
-    if (!result.cnpj) return;
-    const cleanCnpj = result.cnpj.replace(/\D/g, "");
+    if (!cleanCnpj) return;
     setVectorLoading(true);
     try {
       await clearVectorizacaoCache(cleanCnpj, "all");
       setDownloadMsg("Cache vetorizado removido");
-      await refreshVectorStatus();
+      await queryClient.invalidateQueries({ queryKey: ["audit-produto-vector", cleanCnpj] });
+      await vectorQuery.refetch();
     } catch (err: any) {
       setDownloadMsg(err?.message || "Erro ao limpar cache vetorizado");
     } finally {
@@ -234,16 +169,17 @@ export function AuditResultView({ result, elapsed }: AuditResultViewProps) {
   };
 
   const handleRebuildProdutos = async () => {
-    if (!result.cnpj) return;
-    const cleanCnpj = result.cnpj.replace(/\D/g, "");
+    if (!cleanCnpj) return;
     setRuntimeLoading(true);
     try {
       const res = await rebuildRuntimeProdutos(cleanCnpj);
-      setRuntimeStatus(res.runtime || null);
-      const statusRes = await getStatusAnaliseProdutos(cleanCnpj, { includeData: false });
-      setStatusResumo(statusRes.resumo || null);
       setDownloadMsg(`Pipeline de produtos reprocessado (${res.rows} grupos).`);
-      await refreshVectorStatus();
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["audit-produto-runtime", cleanCnpj] }),
+        queryClient.invalidateQueries({ queryKey: ["audit-produto-status", cleanCnpj] }),
+        queryClient.invalidateQueries({ queryKey: ["audit-produto-vector", cleanCnpj] }),
+      ]);
+      await Promise.all([runtimeQuery.refetch(), statusQuery.refetch(), vectorQuery.refetch()]);
     } catch (err: any) {
       setDownloadMsg(err?.message || "Erro ao reprocessar produtos");
     } finally {
@@ -595,7 +531,7 @@ export function AuditResultView({ result, elapsed }: AuditResultViewProps) {
                     variant="outline"
                     size="sm"
                     className="h-8 gap-1.5"
-                    onClick={refreshRuntimeStatus}
+                    onClick={() => void runtimeQuery.refetch()}
                     disabled={runtimeLoading}
                   >
                     <RefreshCw className="h-3.5 w-3.5" />

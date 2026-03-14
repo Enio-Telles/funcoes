@@ -402,6 +402,15 @@ export default function RevisaoParesGrupos() {
 
   const loading = pairsQuery.isLoading || pairsQuery.isFetching;
 
+  const vectorQuery = useQuery({
+    queryKey: ["produto-vector-status", cnpj],
+    queryFn: () => getVectorizacaoStatus(cnpj),
+    enabled: Boolean(cnpj),
+    placeholderData: keepPreviousData,
+    staleTime: 30_000,
+    retry: 1,
+  });
+
   const applyPairsPayload = (payload?: {
     res: Awaited<ReturnType<typeof getParesGruposSimilares>>;
     statusRes: Awaited<ReturnType<typeof getStatusAnaliseProdutos>>;
@@ -457,27 +466,17 @@ export default function RevisaoParesGrupos() {
   }, [pairsQuery.data, similarityMode]);
 
   useEffect(() => {
-    let active = true;
-    if (!cnpj) return;
-    getVectorizacaoStatus(cnpj)
-      .then((res) => {
-        if (active) {
-          setVectorStatus(res.status);
-          setVectorCaches(res.caches || null);
-          setCurrentBaseHash(res.current_base_hash || null);
-        }
-      })
-      .catch(() => {
-        if (active) {
-          setVectorStatus(null);
-          setVectorCaches(null);
-          setCurrentBaseHash(null);
-        }
-      });
-    return () => {
-      active = false;
-    };
-  }, [cnpj]);
+    if (!cnpj) {
+      setVectorStatus(null);
+      setVectorCaches(null);
+      setCurrentBaseHash(null);
+      return;
+    }
+    if (!vectorQuery.data) return;
+    setVectorStatus(vectorQuery.data.status || null);
+    setVectorCaches(vectorQuery.data.caches || null);
+    setCurrentBaseHash(vectorQuery.data.current_base_hash || null);
+  }, [cnpj, vectorQuery.data]);
 
   const handleRecalculateSemantic = async () => {
     if (!cnpj) return;
@@ -505,10 +504,8 @@ export default function RevisaoParesGrupos() {
       setTotalRows(res.total || 0);
       setTotalPages(res.total_pages || 1);
       setServerQuickFilterCounts(res.quick_filter_counts || { todos: 0, unirAutomatico: 0, bloqueios: 0, revisar: 0 });
-      const statusRes = await getVectorizacaoStatus(cnpj);
-      setVectorStatus(statusRes.status);
-      setVectorCaches(statusRes.caches || null);
-      setCurrentBaseHash(statusRes.current_base_hash || null);
+      await queryClient.invalidateQueries({ queryKey: ["produto-vector-status", cnpj] });
+      await vectorQuery.refetch();
       toast.success(targetMode === "hybrid" ? "Pares hibridos recalculados." : "Pares semanticos recalculados.", {
         description: res.message || "A lista foi atualizada com a vetorizacao mais recente.",
       });
@@ -528,10 +525,8 @@ export default function RevisaoParesGrupos() {
         description: `${res.removed.length} arquivo(s) removido(s).`,
       });
       setCacheMeta(null);
-      const statusRes = await getVectorizacaoStatus(cnpj);
-      setVectorStatus(statusRes.status);
-      setVectorCaches(statusRes.caches || null);
-      setCurrentBaseHash(statusRes.current_base_hash || null);
+      await queryClient.invalidateQueries({ queryKey: ["produto-vector-status", cnpj] });
+      await vectorQuery.refetch();
       await loadRows();
     } catch (error) {
       const message = error instanceof Error ? error.message : "Falha ao limpar cache vetorizado.";
