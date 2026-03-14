@@ -684,12 +684,31 @@ export interface ParesGruposSimilaresResponse {
   };
   file_path: string;
   data: ParesGruposSimilaresItem[];
+  page: number;
+  page_size: number;
+  total: number;
+  total_pages: number;
+  quick_filter_counts?: {
+    todos: number;
+    unirAutomatico: number;
+    bloqueios: number;
+    revisar: number;
+  };
 }
 
 export interface CodigosMultiDescricaoResponse {
   success: boolean;
   file_path: string;
   data: Record<string, unknown>[];
+  page: number;
+  page_size: number;
+  total: number;
+  total_pages: number;
+  summary?: {
+    total_codigos: number;
+    total_descricoes: number;
+    total_grupos: number;
+  };
 }
 
 export interface CodigoMultiDescricaoOpcao {
@@ -792,12 +811,27 @@ export async function getParesGruposSimilares(
   cnpj: string,
   metodo: "lexical" | "semantic" | "hybrid" = "lexical",
   forcarRecalculo = false,
-  options?: { topK?: number; minSemanticScore?: number }
+  options?: {
+    topK?: number;
+    minSemanticScore?: number;
+    page?: number;
+    pageSize?: number;
+    search?: string;
+    quickFilter?: "TODOS" | "UNIR_AUTOMATICO" | "BLOQUEIOS" | "REVISAR";
+    sortKey?: "PRIORIDADE" | "SIMILARIDADE" | "RECOMENDACAO";
+    showAnalyzed?: boolean;
+  }
 ) {
   const topK = options?.topK ?? 8;
   const minSemanticScore = options?.minSemanticScore ?? 0.32;
+  const page = options?.page ?? 1;
+  const pageSize = options?.pageSize ?? 50;
+  const search = options?.search ?? "";
+  const quickFilter = options?.quickFilter ?? "TODOS";
+  const sortKey = options?.sortKey ?? "PRIORIDADE";
+  const showAnalyzed = options?.showAnalyzed ?? false;
   return request<ParesGruposSimilaresResponse>(
-    `/produtos/pares-grupos-similares?cnpj=${encodeURIComponent(cnpj)}&metodo=${encodeURIComponent(metodo)}&forcar_recalculo=${forcarRecalculo ? "true" : "false"}&top_k=${encodeURIComponent(String(topK))}&min_semantic_score=${encodeURIComponent(String(minSemanticScore))}`
+    `/produtos/pares-grupos-similares?cnpj=${encodeURIComponent(cnpj)}&metodo=${encodeURIComponent(metodo)}&forcar_recalculo=${forcarRecalculo ? "true" : "false"}&top_k=${encodeURIComponent(String(topK))}&min_semantic_score=${encodeURIComponent(String(minSemanticScore))}&page=${encodeURIComponent(String(page))}&page_size=${encodeURIComponent(String(pageSize))}&search=${encodeURIComponent(search)}&quick_filter=${encodeURIComponent(quickFilter)}&sort_key=${encodeURIComponent(sortKey)}&show_analyzed=${showAnalyzed ? "true" : "false"}`
   );
 }
 
@@ -851,8 +885,24 @@ export async function clearVectorizacaoCache(cnpj: string, metodo: "semantic" | 
   );
 }
 
-export async function getCodigosMultiDescricao(cnpj: string) {
-  return request<CodigosMultiDescricaoResponse>(`/produtos/codigos-multidescricao?cnpj=${encodeURIComponent(cnpj)}`);
+export async function getCodigosMultiDescricao(
+  cnpj: string,
+  options?: {
+    page?: number;
+    pageSize?: number;
+    sortColumn?: string;
+    sortDirection?: "asc" | "desc";
+    showVerified?: boolean;
+  }
+) {
+  const page = options?.page ?? 1;
+  const pageSize = options?.pageSize ?? 50;
+  const sortColumn = options?.sortColumn ?? "";
+  const sortDirection = options?.sortDirection ?? "desc";
+  const showVerified = options?.showVerified ?? false;
+  return request<CodigosMultiDescricaoResponse>(
+    `/produtos/codigos-multidescricao?cnpj=${encodeURIComponent(cnpj)}&page=${encodeURIComponent(String(page))}&page_size=${encodeURIComponent(String(pageSize))}&sort_column=${encodeURIComponent(sortColumn)}&sort_direction=${encodeURIComponent(sortDirection)}&show_verified=${showVerified ? "true" : "false"}`
+  );
 }
 
 export async function getCodigoMultiDescricaoResumo(cnpj: string, codigo: string) {

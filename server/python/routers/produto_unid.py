@@ -101,6 +101,39 @@ _STATUS_ANALISE_COLUMNS = [
 ]
 
 
+def _normalize_page(value: Any) -> int:
+    try:
+        return max(1, int(value))
+    except Exception:
+        return 1
+
+
+def _normalize_page_size(value: Any, default: int = 50, max_size: int = 200) -> int:
+    try:
+        parsed = int(value)
+    except Exception:
+        parsed = default
+    return max(1, min(parsed, max_size))
+
+
+def _paginate_frame(df: pl.DataFrame, page: int, page_size: int) -> tuple[pl.DataFrame, int, int]:
+    total = int(df.height)
+    total_pages = max(1, (total + page_size - 1) // page_size)
+    page = min(page, total_pages)
+    offset = (page - 1) * page_size
+    return df.slice(offset, page_size), total, total_pages
+
+
+def _load_cnpj_dirs(cnpj_limpo: str) -> tuple[Path, Path, Path]:
+    import importlib.util
+
+    _config_path = _PROJETO_DIR / "config.py"
+    _spec = importlib.util.spec_from_file_location("sefin_config_local", str(_config_path))
+    _sefin_config = importlib.util.module_from_spec(_spec)
+    _spec.loader.exec_module(_sefin_config)
+    return _sefin_config.obter_diretorios_cnpj(cnpj_limpo)
+
+
 def _canon_text(value: Any, vazio: str = "(VAZIO)") -> str:
     text = "" if value is None else str(value)
     text = text.strip().upper()
@@ -599,20 +632,24 @@ async def get_pares_grupos_similares(
     forcar_recalculo: bool = Query(False),
     top_k: int = Query(8),
     min_semantic_score: float = Query(0.32),
+    page: int = Query(1),
+    page_size: int = Query(50),
+    search: str | None = Query(None),
+    quick_filter: str = Query("TODOS"),
+    sort_key: str = Query("PRIORIDADE"),
+    show_analyzed: bool = Query(False),
 ):
     cnpj_limpo = re.sub(r"[^0-9]", "", cnpj)
     metodo_norm = str(metodo or "lexical").strip().lower()
     if not cnpj_limpo or not validar_cnpj(cnpj_limpo):
         raise HTTPException(status_code=400, detail="CNPJ invalido")
     try:
-        import importlib.util
-
-        _config_path = _PROJETO_DIR / "config.py"
-        _spec = importlib.util.spec_from_file_location("sefin_config_local", str(_config_path))
-        _sefin_config = importlib.util.module_from_spec(_spec)
-        _spec.loader.exec_module(_sefin_config)
-
-        _, dir_analises, _ = _sefin_config.obter_diretorios_cnpj(cnpj_limpo)
+        page_norm = _normalize_page(page)
+        page_size_norm = _normalize_page_size(page_size, default=50, max_size=200)
+        quick_filter_norm = str(quick_filter or "TODOS").strip().upper()
+        sort_key_norm = str(sort_key or "PRIORIDADE").strip().upper()
+        search_term = str(search or "").strip().upper()
+        _, dir_analises, _ = _load_cnpj_dirs(cnpj_limpo)
         agregados_path = dir_analises / f"produtos_agregados_{cnpj_limpo}.parquet"
 
         def _lexical_cache_metadata(path: Path) -> dict[str, Any]:
@@ -640,6 +677,11 @@ async def get_pares_grupos_similares(
                     "file_path": str(pares_path),
                     "cache_metadata": read_vector_cache_metadata(metadata_path),
                     "data": [],
+                    "page": page_norm,
+                    "page_size": page_size_norm,
+                    "total": 0,
+                    "total_pages": 1,
+                    "quick_filter_counts": {"todos": 0, "unirAutomatico": 0, "bloqueios": 0, "revisar": 0},
                 }
 
             metadata = read_vector_cache_metadata(metadata_path)
@@ -682,20 +724,20 @@ async def get_pares_grupos_similares(
                     "file_path": str(pares_path),
                     "cache_metadata": metadata,
                     "data": [],
+                    "page": page_norm,
+                    "page_size": page_size_norm,
+                    "total": 0,
+                    "total_pages": 1,
+                    "quick_filter_counts": {"todos": 0, "unirAutomatico": 0, "bloqueios": 0, "revisar": 0},
                 }
 
             df = pl.read_parquet(str(pares_path))
-            return {
-                "success": True,
-                "available": True,
-                "metodo": "semantic",
-                "message": "Pares semanticos carregados.",
-                "file_path": str(pares_path),
-                "cache_metadata": metadata,
-                "data": df.to_dicts(),
-            }
-
-        if metodo_norm == "hybrid":
+            selected_path = pares_path
+            selected_metadata = metadata
+            selected_message = "Pares semanticos carregados."
+            selected_available = True
+            selected_method = "semantic"
+        elif metodo_norm == "hybrid":
             status_vector = obter_status_vectorizacao()
             lexical_path = dir_analises / f"pares_descricoes_similares_{cnpj_limpo}.parquet"
             semantic_path = dir_analises / f"pares_descricoes_similares_semanticos_{cnpj_limpo}.parquet"
@@ -710,6 +752,11 @@ async def get_pares_grupos_similares(
                     "file_path": str(hybrid_path),
                     "cache_metadata": read_vector_cache_metadata(metadata_path),
                     "data": [],
+                    "page": page_norm,
+                    "page_size": page_size_norm,
+                    "total": 0,
+                    "total_pages": 1,
+                    "quick_filter_counts": {"todos": 0, "unirAutomatico": 0, "bloqueios": 0, "revisar": 0},
                 }
 
             hybrid_metadata = read_vector_cache_metadata(metadata_path)
@@ -786,30 +833,145 @@ async def get_pares_grupos_similares(
                     "file_path": str(hybrid_path),
                     "cache_metadata": hybrid_metadata,
                     "data": [],
+                    "page": page_norm,
+                    "page_size": page_size_norm,
+                    "total": 0,
+                    "total_pages": 1,
+                    "quick_filter_counts": {"todos": 0, "unirAutomatico": 0, "bloqueios": 0, "revisar": 0},
                 }
 
             df = pl.read_parquet(str(hybrid_path))
-            return {
-                "success": True,
-                "available": True,
-                "metodo": "hybrid",
-                "message": "Pares hibridos carregados.",
-                "file_path": str(hybrid_path),
-                "cache_metadata": hybrid_metadata,
-                "data": df.to_dicts(),
-            }
+            selected_path = hybrid_path
+            selected_metadata = hybrid_metadata
+            selected_message = "Pares hibridos carregados."
+            selected_available = True
+            selected_method = "hybrid"
+        else:
+            pares_path = dir_analises / f"pares_descricoes_similares_{cnpj_limpo}.parquet"
 
-        pares_path = dir_analises / f"pares_descricoes_similares_{cnpj_limpo}.parquet"
+            if (forcar_recalculo or not pares_path.exists()) and agregados_path.exists():
+                df_agregados = pl.read_parquet(str(agregados_path))
+                construir_tabela_pares_descricoes_similares(df_agregados).write_parquet(str(pares_path))
 
-        if (forcar_recalculo or not pares_path.exists()) and agregados_path.exists():
-            df_agregados = pl.read_parquet(str(agregados_path))
-            construir_tabela_pares_descricoes_similares(df_agregados).write_parquet(str(pares_path))
+            if not pares_path.exists():
+                return {
+                    "success": True,
+                    "available": True,
+                    "metodo": "lexical",
+                    "message": "Nenhum par lexical gerado.",
+                    "file_path": str(pares_path),
+                    "cache_metadata": _lexical_cache_metadata(pares_path),
+                    "data": [],
+                    "page": page_norm,
+                    "page_size": page_size_norm,
+                    "total": 0,
+                    "total_pages": 1,
+                    "quick_filter_counts": {"todos": 0, "unirAutomatico": 0, "bloqueios": 0, "revisar": 0},
+                }
 
-        if not pares_path.exists():
-            return {"success": True, "available": True, "metodo": "lexical", "message": "Nenhum par lexical gerado.", "file_path": str(pares_path), "cache_metadata": _lexical_cache_metadata(pares_path), "data": []}
+            df = pl.read_parquet(str(pares_path))
+            selected_path = pares_path
+            selected_metadata = _lexical_cache_metadata(pares_path)
+            selected_message = "Pares lexicais carregados."
+            selected_available = True
+            selected_method = "lexical"
 
-        df = pl.read_parquet(str(pares_path))
-        return {"success": True, "available": True, "metodo": "lexical", "message": "Pares lexicais carregados.", "file_path": str(pares_path), "cache_metadata": _lexical_cache_metadata(pares_path), "data": df.to_dicts()}
+        if not show_analyzed:
+            status_path = _gravar_status_analise(dir_analises, cnpj_limpo)
+            if status_path.exists():
+                df_status = pl.read_parquet(str(status_path))
+                hidden_groups = set(
+                    df_status.filter(
+                        (pl.col("tipo_ref") == "POR_GRUPO")
+                        & pl.col("status_analise").is_in(["VERIFICADO_SEM_ACAO", "UNIDO_ENTRE_GRUPOS", "MANTIDO_SEPARADO"])
+                    ).get_column("ref_id").cast(pl.Utf8).to_list()
+                )
+                if hidden_groups:
+                    df = df.filter(
+                        ~pl.col("chave_produto_a").cast(pl.Utf8).is_in(sorted(hidden_groups))
+                        & ~pl.col("chave_produto_b").cast(pl.Utf8).is_in(sorted(hidden_groups))
+                    )
+
+        quick_filter_counts = {
+            "todos": int(df.height),
+            "unirAutomatico": int(df.filter(pl.col("uniao_automatica_elegivel") == True).height) if "uniao_automatica_elegivel" in df.columns else 0,
+            "bloqueios": int(df.filter(pl.col("bloquear_uniao") == True).height) if "bloquear_uniao" in df.columns else 0,
+            "revisar": int(df.filter(pl.col("recomendacao").cast(pl.Utf8) == "REVISAR").height) if "recomendacao" in df.columns else 0,
+        }
+
+        if quick_filter_norm == "UNIR_AUTOMATICO" and "uniao_automatica_elegivel" in df.columns:
+            df = df.filter(pl.col("uniao_automatica_elegivel") == True)
+        elif quick_filter_norm == "BLOQUEIOS" and "bloquear_uniao" in df.columns:
+            df = df.filter(pl.col("bloquear_uniao") == True)
+        elif quick_filter_norm == "REVISAR" and "recomendacao" in df.columns:
+            df = df.filter(pl.col("recomendacao").cast(pl.Utf8) == "REVISAR")
+
+        if search_term:
+            searchable_columns = [
+                "chave_produto_a",
+                "descricao_a",
+                "ncm_a",
+                "cest_a",
+                "gtin_a",
+                "conflitos_a",
+                "chave_produto_b",
+                "descricao_b",
+                "ncm_b",
+                "cest_b",
+                "gtin_b",
+                "conflitos_b",
+                "recomendacao",
+                "motivo_recomendacao",
+            ]
+            exprs = [
+                pl.col(col).cast(pl.Utf8).str.to_uppercase().str.contains(re.escape(search_term), literal=True)
+                for col in searchable_columns
+                if col in df.columns
+            ]
+            if exprs:
+                combined = exprs[0]
+                for expr in exprs[1:]:
+                    combined = combined | expr
+                df = df.filter(combined)
+
+        if sort_key_norm == "SIMILARIDADE":
+            sort_columns = [col for col in ["score_final", "score_descricao", "descricao_a"] if col in df.columns]
+            descending = [True, True, False][: len(sort_columns)]
+            df = df.sort(sort_columns, descending=descending)
+        elif sort_key_norm == "RECOMENDACAO":
+            sort_columns = [col for col in ["recomendacao", "score_final", "descricao_a"] if col in df.columns]
+            descending = [False, True, False][: len(sort_columns)]
+            df = df.sort(sort_columns, descending=descending)
+        else:
+            df = df.with_columns(
+                pl.when(pl.col("bloquear_uniao") == True)
+                .then(pl.lit(50))
+                .when(pl.col("uniao_automatica_elegivel") == True)
+                .then(pl.lit(40))
+                .when(pl.col("recomendacao").cast(pl.Utf8) == "UNIR_SUGERIDO")
+                .then(pl.lit(30))
+                .when(pl.col("recomendacao").cast(pl.Utf8) == "SEPARAR_SUGERIDO")
+                .then(pl.lit(20))
+                .otherwise(pl.lit(10))
+                .alias("__prioridade")
+            ).sort(["__prioridade", "score_final", "score_descricao", "descricao_a"], descending=[True, True, True, False]).drop("__prioridade")
+
+        paged_df, total, total_pages = _paginate_frame(df, page_norm, page_size_norm)
+
+        return {
+            "success": True,
+            "available": selected_available,
+            "metodo": selected_method,
+            "message": selected_message,
+            "file_path": str(selected_path),
+            "cache_metadata": selected_metadata,
+            "data": paged_df.to_dicts(),
+            "page": min(page_norm, total_pages),
+            "page_size": page_size_norm,
+            "total": total,
+            "total_pages": total_pages,
+            "quick_filter_counts": quick_filter_counts,
+        }
     except Exception as e:
         logger.error("[get_pares_grupos_similares] Erro: %s\n%s", e, traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
@@ -954,65 +1116,78 @@ async def clear_vectorizacao_cache(cnpj: str = Query(...), metodo: str = Query("
 
 
 @router.get("/produtos/codigos-multidescricao")
-async def get_produtos_codigos_multidescricao(cnpj: str = Query(...)):
+async def get_produtos_codigos_multidescricao(
+    cnpj: str = Query(...),
+    page: int = Query(1),
+    page_size: int = Query(50),
+    sort_column: str | None = Query(None),
+    sort_direction: str = Query("desc"),
+    show_verified: bool = Query(False),
+):
     """Retorna os codigos que aparecem com multiplas descricoes para o CNPJ."""
     cnpj_limpo = re.sub(r"[^0-9]", "", cnpj)
     if not cnpj_limpo or not validar_cnpj(cnpj_limpo):
         raise HTTPException(status_code=400, detail="CNPJ invalido")
     try:
-        import importlib.util
-
-        _config_path = _PROJETO_DIR / "config.py"
-        _spec = importlib.util.spec_from_file_location("sefin_config_local", str(_config_path))
-        _sefin_config = importlib.util.module_from_spec(_spec)
-        _spec.loader.exec_module(_sefin_config)
-
-        _, dir_analises, _ = _sefin_config.obter_diretorios_cnpj(cnpj_limpo)
+        page_norm = _normalize_page(page)
+        page_size_norm = _normalize_page_size(page_size, default=50, max_size=200)
+        _, dir_analises, _ = _load_cnpj_dirs(cnpj_limpo)
         path_codigos = dir_analises / f"codigos_multidescricao_{cnpj_limpo}.parquet"
-        path_indexados = dir_analises / f"produtos_indexados_{cnpj_limpo}.parquet"
 
         if not path_codigos.exists():
-            return {"success": True, "file_path": str(path_codigos), "data": []}
+            return {
+                "success": True,
+                "file_path": str(path_codigos),
+                "data": [],
+                "page": page_norm,
+                "page_size": page_size_norm,
+                "total": 0,
+                "total_pages": 1,
+                "summary": {"total_codigos": 0, "total_descricoes": 0, "total_grupos": 0},
+            }
 
         df = pl.read_parquet(str(path_codigos))
 
-        if path_indexados.exists():
-            df_indexados = (
-                pl.read_parquet(str(path_indexados))
-                .with_columns(
-                    [
-                        pl.col("codigo").cast(pl.Utf8),
-                        pl.col("descricao").cast(pl.Utf8),
-                        pl.col("descr_compl").cast(pl.Utf8).fill_null(""),
-                    ]
+        if not show_verified:
+            status_path = _gravar_status_analise(dir_analises, cnpj_limpo)
+            if status_path.exists():
+                df_status = pl.read_parquet(str(status_path))
+                verified_codes = set(
+                    df_status.filter(
+                        (pl.col("tipo_ref") == "POR_CODIGO") & (pl.col("status_analise") == "VERIFICADO_SEM_ACAO")
+                    ).get_column("ref_id").cast(pl.Utf8).to_list()
                 )
-            )
+                if verified_codes:
+                    df = df.filter(~pl.col("codigo").is_in(sorted(verified_codes)))
 
-            df_descr_compl = (
-                df_indexados.group_by(["codigo", "descricao"])
-                .agg(pl.col("descr_compl").drop_nulls().cast(pl.Utf8).unique().sort().alias("__lista_descr_compl"))
-                .with_columns(pl.col("__lista_descr_compl").list.join(" | ").alias("__descr_compl_join"))
-                .with_columns(
-                    pl.when(pl.col("__descr_compl_join") == "")
-                    .then(pl.col("descricao"))
-                    .otherwise(pl.format("{} ::: {}", pl.col("descricao"), pl.col("__descr_compl_join")))
-                    .alias("__descricao_compl_entry")
-                )
-                .group_by("codigo")
-                .agg(
-                    [
-                        pl.col("__descricao_compl_entry").sort().alias("lista_descricoes_compl"),
-                        pl.col("__descr_compl_join").filter(pl.col("__descr_compl_join") != "").unique().sort().alias("lista_descr_compl"),
-                    ]
-                )
-                .with_columns(pl.col("lista_descricoes_compl").list.join("<<#>>").alias("lista_descricoes_compl"))
-                .with_columns(pl.col("lista_descr_compl").list.join(" | ").alias("lista_descr_compl"))
-                .select(["codigo", "lista_descricoes_compl", "lista_descr_compl"])
-            )
+        summary = {
+            "total_codigos": int(df.height),
+            "total_descricoes": int(df.select(pl.sum("qtd_descricoes")).item() or 0) if "qtd_descricoes" in df.columns else 0,
+            "total_grupos": int(df.select(pl.sum("qtd_grupos_descricao_afetados")).item() or 0)
+            if "qtd_grupos_descricao_afetados" in df.columns
+            else 0,
+        }
 
-            df = df.join(df_descr_compl, on="codigo", how="left")
+        sort_col = str(sort_column or "").strip()
+        sort_desc = str(sort_direction or "desc").lower() != "asc"
+        sortable = set(df.columns)
+        if sort_col in sortable:
+            df = df.sort(sort_col, descending=sort_desc, nulls_last=True)
+        elif "qtd_descricoes" in sortable:
+            df = df.sort("qtd_descricoes", descending=True, nulls_last=True)
 
-        return {"success": True, "file_path": str(path_codigos), "data": df.to_dicts()}
+        paged_df, total, total_pages = _paginate_frame(df, page_norm, page_size_norm)
+
+        return {
+            "success": True,
+            "file_path": str(path_codigos),
+            "data": paged_df.to_dicts(),
+            "page": min(page_norm, total_pages),
+            "page_size": page_size_norm,
+            "total": total,
+            "total_pages": total_pages,
+            "summary": summary,
+        }
     except Exception as e:
         logger.error("[get_produtos_codigos_multidescricao] Erro: %s\n%s", e, traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))

@@ -133,6 +133,11 @@ export default function RevisaoManual() {
   const [rows, setRows] = useState<ReviewRow[]>([]);
   const [statusRows, setStatusRows] = useState<ProdutoAnaliseStatusItem[]>([]);
   const [statusResumo, setStatusResumo] = useState<ProdutoAnaliseStatusResumo | null>(null);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
+  const [totalRows, setTotalRows] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
+  const [tableSummary, setTableSummary] = useState<{ total_codigos: number; total_descricoes: number; total_grupos: number } | null>(null);
   const [sortColumn, setSortColumn] = useState<string | undefined>("qtd_descricoes");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc" | undefined>("desc");
   const [autoSeparatingCode, setAutoSeparatingCode] = useState<string | null>(null);
@@ -144,27 +149,33 @@ export default function RevisaoManual() {
   const [showVerified, setShowVerified] = useState(false);
 
   const resetUiState = () => {
-    setSortColumn("qtd_descricoes");
-    setSortDirection("desc");
-    setShowVerified(false);
-    setActiveReasonFilter(null);
-    setReasonGroupFilter(null);
-    window.sessionStorage.removeItem(storageKey);
-  };
+      setSortColumn("qtd_descricoes");
+      setSortDirection("desc");
+      setShowVerified(false);
+      setActiveReasonFilter(null);
+      setReasonGroupFilter(null);
+      setPage(1);
+      setPageSize(50);
+      window.sessionStorage.removeItem(storageKey);
+    };
 
   useEffect(() => {
     if (!cnpj) return;
     try {
       const raw = window.sessionStorage.getItem(storageKey);
       if (!raw) return;
-      const state = JSON.parse(raw) as {
-        sortColumn?: string;
-        sortDirection?: "asc" | "desc";
-        showVerified?: boolean;
+        const state = JSON.parse(raw) as {
+          page?: number;
+          pageSize?: number;
+          sortColumn?: string;
+          sortDirection?: "asc" | "desc";
+          showVerified?: boolean;
         activeReasonFilter?: ReasonFilterState | null;
         reasonGroupFilter?: ReasonGroupFilter;
       };
-      if (typeof state.sortColumn === "string") setSortColumn(state.sortColumn);
+        if (typeof state.page === "number" && state.page > 0) setPage(state.page);
+        if (typeof state.pageSize === "number" && state.pageSize > 0) setPageSize(state.pageSize);
+        if (typeof state.sortColumn === "string") setSortColumn(state.sortColumn);
       if (state.sortDirection === "asc" || state.sortDirection === "desc") setSortDirection(state.sortDirection);
       if (typeof state.showVerified === "boolean") setShowVerified(state.showVerified);
       if (state.activeReasonFilter && typeof state.activeReasonFilter.mode === "string" && typeof state.activeReasonFilter.motivo === "string") {
@@ -182,15 +193,17 @@ export default function RevisaoManual() {
     if (!cnpj) return;
     window.sessionStorage.setItem(
       storageKey,
-      JSON.stringify({
-        sortColumn,
-        sortDirection,
-        showVerified,
+        JSON.stringify({
+          page,
+          pageSize,
+          sortColumn,
+          sortDirection,
+          showVerified,
         activeReasonFilter,
         reasonGroupFilter,
       })
     );
-  }, [cnpj, storageKey, sortColumn, sortDirection, showVerified, activeReasonFilter, reasonGroupFilter]);
+  }, [cnpj, storageKey, page, pageSize, sortColumn, sortDirection, showVerified, activeReasonFilter, reasonGroupFilter]);
 
   const loadData = async () => {
     if (!cnpj) {
@@ -201,8 +214,14 @@ export default function RevisaoManual() {
 
     setLoading(true);
     try {
-      const [res, statusRes] = await Promise.all([
-        getCodigosMultiDescricao(cnpj),
+        const [res, statusRes] = await Promise.all([
+        getCodigosMultiDescricao(cnpj, {
+          page,
+          pageSize,
+          sortColumn,
+          sortDirection: sortDirection ?? "desc",
+          showVerified,
+        }),
         getStatusAnaliseProdutos(cnpj).catch(() => ({
           success: true,
           file_path: "",
@@ -217,6 +236,11 @@ export default function RevisaoManual() {
         })),
       ]);
       setRows(res.success ? res.data : []);
+      setPage(res.page || page);
+      setPageSize(res.page_size || pageSize);
+      setTotalRows(res.total || 0);
+      setTotalPages(res.total_pages || 1);
+      setTableSummary(res.summary || null);
       setStatusRows(statusRes.success ? statusRes.data : []);
       setStatusResumo(statusRes.success ? statusRes.resumo : null);
     } catch (error) {
@@ -231,7 +255,7 @@ export default function RevisaoManual() {
 
   useEffect(() => {
     void loadData();
-  }, [cnpj]);
+  }, [cnpj, page, pageSize, sortColumn, sortDirection, showVerified]);
 
   useEffect(() => {
     const handleAtualizacao = (event: MessageEvent) => {
@@ -251,21 +275,16 @@ export default function RevisaoManual() {
       if (sortDirection === "desc") {
         setSortColumn(undefined);
       }
+      setPage(1);
       return;
     }
     setSortColumn(column);
     setSortDirection("asc");
+    setPage(1);
   };
 
   const sortedRows = useMemo(() => {
-    const verifiedByCodigo = new Set(
-      statusRows
-        .filter((item) => item.tipo_ref === "POR_CODIGO" && item.status_analise === "VERIFICADO_SEM_ACAO")
-        .map((item) => normalizeValue(item.ref_id))
-    );
-    let data = showVerified
-      ? [...rows]
-      : rows.filter((row) => !verifiedByCodigo.has(normalizeValue(row.codigo)));
+    let data = [...rows];
     if (activeReasonFilter) {
       const ignored = bulkPreview[activeReasonFilter.mode]?.motivos_ignorados ?? [];
       const codigosFiltrados = new Set(
@@ -285,18 +304,16 @@ export default function RevisaoManual() {
       });
       data = data.filter((row) => matchingCodes.has(normalizeValue(row.codigo)));
     }
-    if (!sortColumn || !sortDirection) return data;
-
-    return data.sort((a, b) => {
-      const aVal = normalizeValue(a[sortColumn]);
-      const bVal = normalizeValue(b[sortColumn]);
-      const aNum = Number(aVal);
-      const bNum = Number(bVal);
-      const bothNumeric = Number.isFinite(aNum) && Number.isFinite(bNum);
-      const cmp = bothNumeric ? aNum - bNum : aVal.localeCompare(bVal);
-      return sortDirection === "asc" ? cmp : -cmp;
-    });
-  }, [rows, statusRows, showVerified, sortColumn, sortDirection, activeReasonFilter, reasonGroupFilter, bulkPreview]);
+    if (sortColumn === "__similaridade__" && sortDirection) {
+      data = [...data].sort((a, b) => {
+        const aScore = analyzeDescriptions(splitDescriptions(a.lista_descricoes)).maxSimilarity;
+        const bScore = analyzeDescriptions(splitDescriptions(b.lista_descricoes)).maxSimilarity;
+        const cmp = aScore - bScore;
+        return sortDirection === "asc" ? cmp : -cmp;
+      });
+    }
+    return data;
+  }, [rows, activeReasonFilter, reasonGroupFilter, bulkPreview, sortColumn, sortDirection]);
 
   const visibleCodigos = useMemo(
     () => sortedRows.map((row) => normalizeValue(row.codigo)).filter(Boolean),
@@ -328,8 +345,8 @@ export default function RevisaoManual() {
     };
   }, [cnpj, visibleCodigos]);
 
-  const totalDescricoes = useMemo(() => sumMetric(rows, "qtd_descricoes"), [rows]);
-  const totalGrupos = useMemo(() => sumMetric(rows, "qtd_grupos_descricao_afetados"), [rows]);
+  const totalDescricoes = tableSummary?.total_descricoes ?? sumMetric(rows, "qtd_descricoes");
+  const totalGrupos = tableSummary?.total_grupos ?? sumMetric(rows, "qtd_grupos_descricao_afetados");
 
   const verifiedByCodigo = useMemo(
     () =>
@@ -348,8 +365,8 @@ export default function RevisaoManual() {
         if (isSimilarityReason(item.motivo)) matchingCodes.add(normalizeValue(item.codigo));
       });
     });
-    return rows.filter((row) => matchingCodes.has(normalizeValue(row.codigo)) && (showVerified || !verifiedByCodigo.has(normalizeValue(row.codigo)))).length;
-  }, [bulkPreview, rows, showVerified, verifiedByCodigo]);
+    return rows.filter((row) => matchingCodes.has(normalizeValue(row.codigo))).length;
+  }, [bulkPreview, rows]);
 
   const fiscalBlockedCount = useMemo(() => {
     const matchingCodes = new Set<string>();
@@ -358,8 +375,8 @@ export default function RevisaoManual() {
         if (isFiscalReason(item.motivo)) matchingCodes.add(normalizeValue(item.codigo));
       });
     });
-    return rows.filter((row) => matchingCodes.has(normalizeValue(row.codigo)) && (showVerified || !verifiedByCodigo.has(normalizeValue(row.codigo)))).length;
-  }, [bulkPreview, rows, showVerified, verifiedByCodigo]);
+    return rows.filter((row) => matchingCodes.has(normalizeValue(row.codigo))).length;
+  }, [bulkPreview, rows]);
 
   const toggleVerified = async (codigo: string, descricoes: string) => {
     setStatusUpdatingCode(codigo);
@@ -547,7 +564,14 @@ export default function RevisaoManual() {
           <Button variant="outline" className="gap-2" onClick={resetUiState}>
             Restaurar padrao
           </Button>
-          <Button variant={showVerified ? "default" : "outline"} className="gap-2" onClick={() => setShowVerified((prev) => !prev)}>
+          <Button
+            variant={showVerified ? "default" : "outline"}
+            className="gap-2"
+            onClick={() => {
+              setShowVerified((prev) => !prev);
+              setPage(1);
+            }}
+          >
             <CheckCircle2 className="h-4 w-4" />
             {showVerified ? "Ocultar verificados" : "Mostrar verificados"}
           </Button>
@@ -563,7 +587,7 @@ export default function RevisaoManual() {
       </div>
 
       <div className="grid gap-3 md:grid-cols-3">
-        <StatBox label="Codigos pendentes" value={rows.length} />
+        <StatBox label="Codigos pendentes" value={tableSummary?.total_codigos ?? totalRows} />
         <StatBox label="Descricoes envolvidas" value={totalDescricoes} />
         <StatBox label="Grupos afetados" value={totalGrupos} />
       </div>
@@ -585,7 +609,9 @@ export default function RevisaoManual() {
                 Consolidar define uma descricao canonica para o codigo. Separar divide o codigo em novos produtos.
               </div>
             </div>
-            <div className="text-xs font-semibold text-slate-500">{sortedRows.length} pendentes</div>
+            <div className="text-xs font-semibold text-slate-500">
+              Pagina {page}/{totalPages} · {sortedRows.length} itens visiveis · {totalRows} no total
+            </div>
           </div>
           <div className="mt-3 flex flex-wrap gap-2">
             <Button
@@ -738,10 +764,40 @@ export default function RevisaoManual() {
               Exportar bloqueios filtrados
             </button>
           </div>
-          <div className="mt-2 text-xs text-slate-500">
-            Ordem de agressividade: <strong>texto + NCM + CEST + GTIN</strong> é a mais conservadora. <strong>somente texto muito diferente</strong> cobre mais casos, mas aumenta o risco.
+            <div className="mt-2 text-xs text-slate-500">
+              Ordem de agressividade: <strong>texto + NCM + CEST + GTIN</strong> é a mais conservadora. <strong>somente texto muito diferente</strong> cobre mais casos, mas aumenta o risco.
+            </div>
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t pt-3">
+              <div className="flex items-center gap-2 text-xs text-slate-500">
+                <span>Linhas por pagina</span>
+                <select
+                  className="h-8 rounded-md border border-slate-300 bg-white px-2 text-xs"
+                  value={pageSize}
+                  onChange={(event) => {
+                    setPageSize(Number(event.target.value));
+                    setPage(1);
+                  }}
+                >
+                  {[25, 50, 100].map((value) => (
+                    <option key={value} value={value}>
+                      {value}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="flex items-center gap-2">
+                <Button size="sm" variant="outline" disabled={page <= 1 || loading} onClick={() => setPage((current) => Math.max(1, current - 1))}>
+                  Anterior
+                </Button>
+                <span className="text-xs text-slate-500">
+                  Pagina {page} de {totalPages}
+                </span>
+                <Button size="sm" variant="outline" disabled={page >= totalPages || loading} onClick={() => setPage((current) => Math.min(totalPages, current + 1))}>
+                  Proxima
+                </Button>
+              </div>
+            </div>
           </div>
-        </div>
 
         {loading ? (
           <div className="flex flex-col items-center justify-center gap-3 py-20">

@@ -27,7 +27,6 @@ import {
   type DescricaoManualMapItem,
   type ParesGruposSimilaresItem,
   type ProdutoAnaliseStatusResumo,
-  type ProdutoAnaliseStatusItem,
 } from "@/lib/pythonApi";
 
 type SelectedGroupRow = {
@@ -231,7 +230,6 @@ export default function RevisaoParesGrupos() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [rows, setRows] = useState<ParesGruposSimilaresItem[]>([]);
-  const [statusRows, setStatusRows] = useState<ProdutoAnaliseStatusItem[]>([]);
   const [statusResumo, setStatusResumo] = useState<ProdutoAnaliseStatusResumo | null>(null);
   const [selectedPairKeys, setSelectedPairKeys] = useState<string[]>([]);
   const [canonicalKey, setCanonicalKey] = useState<string>("");
@@ -239,6 +237,16 @@ export default function RevisaoParesGrupos() {
   const [showAnalyzed, setShowAnalyzed] = useState(false);
   const [quickFilter, setQuickFilter] = useState<PairQuickFilter>("TODOS");
   const [sortKey, setSortKey] = useState<PairSortKey>("PRIORIDADE");
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
+  const [totalRows, setTotalRows] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
+  const [serverQuickFilterCounts, setServerQuickFilterCounts] = useState({
+    todos: 0,
+    unirAutomatico: 0,
+    bloqueios: 0,
+    revisar: 0,
+  });
   const [similarityMode, setSimilarityMode] = useState<SimilarityMode>("lexical");
   const [semanticTopK, setSemanticTopK] = useState<number>(8);
   const [semanticThreshold, setSemanticThreshold] = useState<number>(0.32);
@@ -271,6 +279,8 @@ export default function RevisaoParesGrupos() {
     setShowAnalyzed(false);
     setQuickFilter("TODOS");
     setSortKey("PRIORIDADE");
+    setPage(1);
+    setPageSize(50);
     setSimilarityMode("lexical");
     setPendingVectorMode(null);
     window.sessionStorage.removeItem(storageKey);
@@ -286,6 +296,8 @@ export default function RevisaoParesGrupos() {
         showAnalyzed?: boolean;
         quickFilter?: PairQuickFilter;
         sortKey?: PairSortKey;
+        page?: number;
+        pageSize?: number;
         similarityMode?: SimilarityMode;
         pendingVectorMode?: SimilarityMode | null;
         semanticTopK?: number;
@@ -306,6 +318,8 @@ export default function RevisaoParesGrupos() {
       if (typeof state.showAnalyzed === "boolean") setShowAnalyzed(state.showAnalyzed);
       if (state.quickFilter) setQuickFilter(state.quickFilter);
       if (state.sortKey) setSortKey(state.sortKey);
+      if (typeof state.page === "number" && state.page > 0) setPage(state.page);
+      if (typeof state.pageSize === "number" && state.pageSize > 0) setPageSize(state.pageSize);
       if (state.similarityMode === "lexical" || state.similarityMode === "semantic" || state.similarityMode === "hybrid") setSimilarityMode(state.similarityMode);
       if (state.pendingVectorMode === "semantic" || state.pendingVectorMode === "hybrid") setPendingVectorMode(state.pendingVectorMode);
       if (typeof state.semanticTopK === "number") setSemanticTopK(state.semanticTopK);
@@ -326,6 +340,8 @@ export default function RevisaoParesGrupos() {
         showAnalyzed,
         quickFilter,
         sortKey,
+        page,
+        pageSize,
         similarityMode,
         pendingVectorMode,
         semanticTopK,
@@ -334,12 +350,11 @@ export default function RevisaoParesGrupos() {
         currentBaseHash,
       })
     );
-  }, [cnpj, storageKey, search, showAnalyzed, quickFilter, sortKey, similarityMode, pendingVectorMode, semanticTopK, semanticThreshold, cacheMeta, currentBaseHash]);
+  }, [cnpj, storageKey, search, showAnalyzed, quickFilter, sortKey, page, pageSize, similarityMode, pendingVectorMode, semanticTopK, semanticThreshold, cacheMeta, currentBaseHash]);
 
   const loadRows = async () => {
     if (!cnpj) {
       setRows([]);
-      setStatusRows([]);
       setLoading(false);
       return;
     }
@@ -347,11 +362,20 @@ export default function RevisaoParesGrupos() {
     setLoading(true);
     try {
       const [res, statusRes] = await Promise.all([
-        getParesGruposSimilares(cnpj, similarityMode, false, { topK: semanticTopK, minSemanticScore: semanticThreshold }),
+        getParesGruposSimilares(cnpj, similarityMode, false, {
+          topK: semanticTopK,
+          minSemanticScore: semanticThreshold,
+          page,
+          pageSize,
+          search,
+          quickFilter,
+          sortKey,
+          showAnalyzed,
+        }),
         getStatusAnaliseProdutos(cnpj).catch(() => ({
           success: true,
           file_path: "",
-          data: [] as ProdutoAnaliseStatusItem[],
+          data: [],
           resumo: {
             pendentes: 0,
             verificados: 0,
@@ -366,22 +390,48 @@ export default function RevisaoParesGrupos() {
           description: res.message || "Dependencias de vetorizacao indisponiveis neste ambiente.",
         });
         setSimilarityMode("lexical");
-        const lexicalRes = await getParesGruposSimilares(cnpj, "lexical", false, { topK: semanticTopK, minSemanticScore: semanticThreshold });
+        const lexicalRes = await getParesGruposSimilares(cnpj, "lexical", false, {
+          topK: semanticTopK,
+          minSemanticScore: semanticThreshold,
+          page,
+          pageSize,
+          search,
+          quickFilter,
+          sortKey,
+          showAnalyzed,
+        });
         setRows(lexicalRes.success ? lexicalRes.data : []);
         setCacheMeta(lexicalRes.cache_metadata || null);
+        setTotalRows(lexicalRes.total || 0);
+        setTotalPages(lexicalRes.total_pages || 1);
+        setServerQuickFilterCounts(lexicalRes.quick_filter_counts || { todos: 0, unirAutomatico: 0, bloqueios: 0, revisar: 0 });
       } else if (!res.success && similarityMode === "hybrid") {
         toast.error("Modo hibrido indisponivel", {
           description: res.message || "Dependencias de vetorizacao indisponiveis neste ambiente.",
         });
         setSimilarityMode("lexical");
-        const lexicalRes = await getParesGruposSimilares(cnpj, "lexical", false, { topK: semanticTopK, minSemanticScore: semanticThreshold });
+        const lexicalRes = await getParesGruposSimilares(cnpj, "lexical", false, {
+          topK: semanticTopK,
+          minSemanticScore: semanticThreshold,
+          page,
+          pageSize,
+          search,
+          quickFilter,
+          sortKey,
+          showAnalyzed,
+        });
         setRows(lexicalRes.success ? lexicalRes.data : []);
         setCacheMeta(lexicalRes.cache_metadata || null);
+        setTotalRows(lexicalRes.total || 0);
+        setTotalPages(lexicalRes.total_pages || 1);
+        setServerQuickFilterCounts(lexicalRes.quick_filter_counts || { todos: 0, unirAutomatico: 0, bloqueios: 0, revisar: 0 });
       } else {
         setRows(res.success ? res.data : []);
         setCacheMeta(res.cache_metadata || null);
+        setTotalRows(res.total || 0);
+        setTotalPages(res.total_pages || 1);
+        setServerQuickFilterCounts(res.quick_filter_counts || { todos: 0, unirAutomatico: 0, bloqueios: 0, revisar: 0 });
       }
-      setStatusRows(statusRes.success ? statusRes.data : []);
       setStatusResumo(statusRes.success ? statusRes.resumo : null);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Falha ao carregar pares candidatos.";
@@ -393,7 +443,7 @@ export default function RevisaoParesGrupos() {
 
   useEffect(() => {
     void loadRows();
-  }, [cnpj, similarityMode, semanticTopK, semanticThreshold]);
+  }, [cnpj, similarityMode, semanticTopK, semanticThreshold, page, pageSize, search, quickFilter, sortKey, showAnalyzed]);
 
   useEffect(() => {
     let active = true;
@@ -423,7 +473,16 @@ export default function RevisaoParesGrupos() {
     setLoading(true);
     try {
       const targetMode: SimilarityMode = similarityMode === "hybrid" ? "hybrid" : "semantic";
-      const res = await getParesGruposSimilares(cnpj, targetMode, true, { topK: semanticTopK, minSemanticScore: semanticThreshold });
+      const res = await getParesGruposSimilares(cnpj, targetMode, true, {
+        topK: semanticTopK,
+        minSemanticScore: semanticThreshold,
+        page,
+        pageSize,
+        search,
+        quickFilter,
+        sortKey,
+        showAnalyzed,
+      });
       if (!res.success) {
         toast.error(targetMode === "hybrid" ? "Modo hibrido indisponivel" : "Modo semantico indisponivel", {
           description: res.message || `Nao foi possivel recalcular os pares ${targetMode === "hybrid" ? "hibridos" : "semanticos"}.`,
@@ -433,6 +492,9 @@ export default function RevisaoParesGrupos() {
       }
       setRows(res.data || []);
       setCacheMeta(res.cache_metadata || null);
+      setTotalRows(res.total || 0);
+      setTotalPages(res.total_pages || 1);
+      setServerQuickFilterCounts(res.quick_filter_counts || { todos: 0, unirAutomatico: 0, bloqueios: 0, revisar: 0 });
       const statusRes = await getVectorizacaoStatus(cnpj);
       setVectorStatus(statusRes.status);
       setVectorCaches(statusRes.caches || null);
@@ -471,27 +533,6 @@ export default function RevisaoParesGrupos() {
       setLoading(false);
     }
   };
-
-  const statusByGrupo = useMemo(
-    () =>
-      new Map(
-        statusRows
-          .filter((item) => normalizeValue(item.tipo_ref) === "POR_GRUPO")
-          .map((item) => [normalizeValue(item.ref_id), normalizeValue(item.status_analise)])
-      ),
-    [statusRows]
-  );
-
-  const visibleRows = useMemo(() => {
-    const hiddenStatuses = new Set(["VERIFICADO_SEM_ACAO", "UNIDO_ENTRE_GRUPOS", "MANTIDO_SEPARADO"]);
-    return showAnalyzed
-      ? rows
-      : rows.filter((row) => {
-          const statusA = statusByGrupo.get(normalizeValue(row.chave_produto_a)) || "";
-          const statusB = statusByGrupo.get(normalizeValue(row.chave_produto_b)) || "";
-          return !hiddenStatuses.has(statusA) && !hiddenStatuses.has(statusB);
-        });
-  }, [rows, statusByGrupo, showAnalyzed]);
 
   const semanticGroupEstimate = useMemo(() => {
     const keys = new Set<string>();
@@ -543,75 +584,8 @@ export default function RevisaoParesGrupos() {
     setPendingVectorMode(null);
   };
 
-  const quickFilterCounts = useMemo(
-    () => ({
-      todos: visibleRows.length,
-      unirAutomatico: visibleRows.filter((row) => Boolean(row.uniao_automatica_elegivel)).length,
-      bloqueios: visibleRows.filter((row) => Boolean(row.bloquear_uniao)).length,
-      revisar: visibleRows.filter((row) => normalizeValue(row.recomendacao) === "REVISAR").length,
-    }),
-    [visibleRows]
-  );
-
-  const filteredRows = useMemo(() => {
-    const term = search.trim().toUpperCase();
-    const quickFilteredRows = visibleRows.filter((row) => {
-      if (quickFilter === "UNIR_AUTOMATICO") return Boolean(row.uniao_automatica_elegivel);
-      if (quickFilter === "BLOQUEIOS") return Boolean(row.bloquear_uniao);
-      if (quickFilter === "REVISAR") return normalizeValue(row.recomendacao) === "REVISAR";
-      return true;
-    });
-
-    const searchedRows = !term
-      ? quickFilteredRows
-      : quickFilteredRows.filter((row) => {
-          return [
-            row.chave_produto_a,
-            row.descricao_a,
-            row.ncm_a,
-            row.cest_a,
-            row.gtin_a,
-            row.conflitos_a,
-            row.chave_produto_b,
-            row.descricao_b,
-            row.ncm_b,
-            row.cest_b,
-            row.gtin_b,
-            row.conflitos_b,
-            row.recomendacao,
-            row.motivo_recomendacao,
-          ].some((value) => normalizeValue(value).toUpperCase().includes(term));
-        });
-
-    return [...searchedRows].sort((a, b) => {
-      if (sortKey === "SIMILARIDADE") {
-        const scoreDiff = Number(b.score_final || 0) - Number(a.score_final || 0);
-        if (scoreDiff !== 0) return scoreDiff;
-      }
-
-      if (sortKey === "RECOMENDACAO") {
-        const recomendacaoDiff = normalizeValue(a.recomendacao).localeCompare(normalizeValue(b.recomendacao));
-        if (recomendacaoDiff !== 0) return recomendacaoDiff;
-      }
-
-      const priorityDiff = getPairPriority(b) - getPairPriority(a);
-      if (priorityDiff !== 0) return priorityDiff;
-
-      const autoDiff = Number(Boolean(b.uniao_automatica_elegivel)) - Number(Boolean(a.uniao_automatica_elegivel));
-      if (autoDiff !== 0) return autoDiff;
-
-      const blockDiff = Number(Boolean(b.bloquear_uniao)) - Number(Boolean(a.bloquear_uniao));
-      if (blockDiff !== 0) return blockDiff;
-
-      const finalScoreDiff = Number(b.score_final || 0) - Number(a.score_final || 0);
-      if (finalScoreDiff !== 0) return finalScoreDiff;
-
-      const descScoreDiff = Number(b.score_descricao || 0) - Number(a.score_descricao || 0);
-      if (descScoreDiff !== 0) return descScoreDiff;
-
-      return normalizeValue(a.descricao_a).localeCompare(normalizeValue(b.descricao_a));
-    });
-  }, [visibleRows, search, quickFilter, sortKey]);
+  const quickFilterCounts = serverQuickFilterCounts;
+  const filteredRows = useMemo(() => rows, [rows]);
 
   const selectedRows = useMemo(() => buildSelectedGroupsFromPairs(filteredRows, selectedPairKeys), [filteredRows, selectedPairKeys]);
   const visibleEligibleOverlap = useMemo(
@@ -1146,7 +1120,14 @@ export default function RevisaoParesGrupos() {
           >
             Limpar cache vetorizado
           </Button>
-          <Button variant={showAnalyzed ? "default" : "outline"} className="gap-2" onClick={() => setShowAnalyzed((prev) => !prev)}>
+          <Button
+            variant={showAnalyzed ? "default" : "outline"}
+            className="gap-2"
+            onClick={() => {
+              setShowAnalyzed((prev) => !prev);
+              setPage(1);
+            }}
+          >
             <CheckCircle2 className="h-4 w-4" />
             {showAnalyzed ? "Ocultar analisados" : "Mostrar analisados"}
           </Button>
@@ -1201,7 +1182,7 @@ export default function RevisaoParesGrupos() {
       ) : null}
 
       <div className="grid gap-3 md:grid-cols-3">
-        <StatBox label="Pares candidatos" value={filteredRows.length} />
+        <StatBox label="Pares candidatos" value={totalRows} />
         <StatBox label="Selecionados" value={selectedRows.length} />
         <StatBox label="Codigos envolvidos" value={countSelectedCodes(selectedRows)} />
       </div>
@@ -1262,18 +1243,18 @@ export default function RevisaoParesGrupos() {
             <div className="text-sm font-black text-slate-900">Pares candidatos</div>
             <div className="mt-1 text-xs text-slate-500">A lista mostra pares de grupos com similaridade textual e/ou fiscal suficiente para decisão.</div>
             <div className="mt-3 flex flex-wrap gap-2">
-              <Button size="sm" variant={quickFilter === "TODOS" ? "default" : "outline"} onClick={() => setQuickFilter("TODOS")}>
-                Todos ({quickFilterCounts.todos})
-              </Button>
-              <Button size="sm" variant={quickFilter === "UNIR_AUTOMATICO" ? "default" : "outline"} onClick={() => setQuickFilter("UNIR_AUTOMATICO")}>
-                Unir automaticamente ({quickFilterCounts.unirAutomatico})
-              </Button>
-              <Button size="sm" variant={quickFilter === "BLOQUEIOS" ? "default" : "outline"} onClick={() => setQuickFilter("BLOQUEIOS")}>
-                Bloqueios ({quickFilterCounts.bloqueios})
-              </Button>
-              <Button size="sm" variant={quickFilter === "REVISAR" ? "default" : "outline"} onClick={() => setQuickFilter("REVISAR")}>
-                Revisar ({quickFilterCounts.revisar})
-              </Button>
+                <Button size="sm" variant={quickFilter === "TODOS" ? "default" : "outline"} onClick={() => { setQuickFilter("TODOS"); setPage(1); }}>
+                  Todos ({quickFilterCounts.todos})
+                </Button>
+                <Button size="sm" variant={quickFilter === "UNIR_AUTOMATICO" ? "default" : "outline"} onClick={() => { setQuickFilter("UNIR_AUTOMATICO"); setPage(1); }}>
+                  Unir automaticamente ({quickFilterCounts.unirAutomatico})
+                </Button>
+                <Button size="sm" variant={quickFilter === "BLOQUEIOS" ? "default" : "outline"} onClick={() => { setQuickFilter("BLOQUEIOS"); setPage(1); }}>
+                  Bloqueios ({quickFilterCounts.bloqueios})
+                </Button>
+                <Button size="sm" variant={quickFilter === "REVISAR" ? "default" : "outline"} onClick={() => { setQuickFilter("REVISAR"); setPage(1); }}>
+                  Revisar ({quickFilterCounts.revisar})
+                </Button>
             </div>
             <div className="mt-2 flex flex-wrap gap-2">
               <Button size="sm" variant="outline" onClick={() => selectVisibleRows((row) => Boolean(row.uniao_automatica_elegivel))}>
@@ -1302,17 +1283,50 @@ export default function RevisaoParesGrupos() {
               <Button size="sm" variant="ghost" onClick={handleExportVisiblePairs}>
                 Exportar pares visiveis
               </Button>
-              <Button size="sm" variant="ghost" onClick={handleExportCurrentFilter}>
-                Exportar pares filtrados
-              </Button>
+                <Button size="sm" variant="ghost" onClick={handleExportCurrentFilter}>
+                  Exportar pares filtrados
+                </Button>
+              </div>
+              <Input
+                value={search}
+                onChange={(event) => {
+                  setSearch(event.target.value);
+                  setPage(1);
+                }}
+                placeholder="Filtrar por descricao, NCM, CEST, GTIN ou recomendacao"
+                className="mt-3"
+              />
+              <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t pt-3">
+                <div className="flex items-center gap-2 text-xs text-slate-500">
+                  <span>Linhas por pagina</span>
+                  <select
+                    className="h-8 rounded-md border border-slate-300 bg-white px-2 text-xs"
+                    value={pageSize}
+                    onChange={(event) => {
+                      setPageSize(Number(event.target.value));
+                      setPage(1);
+                    }}
+                  >
+                    {[25, 50, 100].map((value) => (
+                      <option key={value} value={value}>
+                        {value}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="text-xs text-slate-500">
+                  Pagina {page}/{totalPages} · {filteredRows.length} itens nesta pagina · {totalRows} no total
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button size="sm" variant="outline" disabled={page <= 1 || loading} onClick={() => setPage((current) => Math.max(1, current - 1))}>
+                    Anterior
+                  </Button>
+                  <Button size="sm" variant="outline" disabled={page >= totalPages || loading} onClick={() => setPage((current) => Math.min(totalPages, current + 1))}>
+                    Proxima
+                  </Button>
+                </div>
+              </div>
             </div>
-            <Input
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              placeholder="Filtrar por descricao, NCM, CEST, GTIN ou recomendacao"
-              className="mt-3"
-            />
-          </div>
 
           {loading ? (
             <div className="flex flex-col items-center justify-center gap-3 py-20">
@@ -1328,20 +1342,20 @@ export default function RevisaoParesGrupos() {
                     <th className="px-4 py-3 text-left font-medium text-slate-700">Grupo A</th>
                     <th className="px-4 py-3 text-left font-medium text-slate-700">Grupo B</th>
                     <th className="px-4 py-3 text-left font-medium text-slate-700">
-                      <button type="button" className="inline-flex items-center gap-1 font-medium text-slate-700 hover:text-slate-900" onClick={() => setSortKey("SIMILARIDADE")}>
+                        <button type="button" className="inline-flex items-center gap-1 font-medium text-slate-700 hover:text-slate-900" onClick={() => { setSortKey("SIMILARIDADE"); setPage(1); }}>
                         Similaridade
                         {sortKey === "SIMILARIDADE" ? <span className="text-[10px] text-blue-600">ativa</span> : null}
                       </button>
                     </th>
                     <th className="px-4 py-3 text-left font-medium text-slate-700">Fiscal</th>
                     <th className="px-4 py-3 text-left font-medium text-slate-700">
-                      <button type="button" className="inline-flex items-center gap-1 font-medium text-slate-700 hover:text-slate-900" onClick={() => setSortKey("RECOMENDACAO")}>
+                        <button type="button" className="inline-flex items-center gap-1 font-medium text-slate-700 hover:text-slate-900" onClick={() => { setSortKey("RECOMENDACAO"); setPage(1); }}>
                         Recomendacao
                         {sortKey === "RECOMENDACAO" ? <span className="text-[10px] text-blue-600">ativa</span> : null}
                       </button>
                     </th>
                     <th className="px-4 py-3 text-left font-medium text-slate-700">
-                      <button type="button" className="inline-flex items-center gap-1 font-medium text-slate-700 hover:text-slate-900" onClick={() => setSortKey("PRIORIDADE")}>
+                        <button type="button" className="inline-flex items-center gap-1 font-medium text-slate-700 hover:text-slate-900" onClick={() => { setSortKey("PRIORIDADE"); setPage(1); }}>
                         Acoes
                         {sortKey === "PRIORIDADE" ? <span className="text-[10px] text-blue-600">ativa</span> : null}
                       </button>
