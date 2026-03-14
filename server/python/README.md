@@ -23,6 +23,28 @@ pip install -r requirements.txt
 > Se o arquivo `requirements.txt` não existir, as principais bibliotecas necessárias são:
 > `fastapi uvicorn polars oracledb pyarrow openpyxl xlsxwriter python-docx pydantic-settings`
 
+## Dependências opcionais de vetorização
+
+O módulo de produtos consegue rodar em três modos:
+
+- `lexical`: sem dependências extras
+- `semantic`: requer `sentence-transformers`
+- `hybrid`: requer `sentence-transformers` e usa `FAISS` quando disponível
+
+Para o ambiente Conda `audit`, instale assim:
+
+```bash
+conda run -n audit pip install -r server/python/requirements-vectorizacao.txt
+```
+
+Se `faiss-cpu` não estiver disponível no ambiente, o sistema ainda funciona com:
+
+```bash
+conda run -n audit pip install sentence-transformers
+```
+
+Nesse caso, a busca semântica entra em `NUMPY fallback`, com custo maior de CPU.
+
 ## 📡 Endpoints Principais
 
 | Rota | Descrição |
