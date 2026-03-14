@@ -820,6 +820,30 @@ export async function getVectorizacaoStatus(cnpj: string) {
   return request<VectorizacaoStatusResponse>(`/produtos/vectorizacao-status?cnpj=${encodeURIComponent(cnpj)}`);
 }
 
+export interface ProdutoRuntimeStatusResponse {
+  success: boolean;
+  cnpj: string;
+  runtime: {
+    compat_mode: boolean;
+    pipeline_legacy_removed: boolean;
+    files: Record<string, { path: string; exists: boolean; size_bytes?: number }>;
+  };
+}
+
+export async function getRuntimeProdutosStatus(cnpj: string) {
+  return request<ProdutoRuntimeStatusResponse>(`/produtos/runtime-status?cnpj=${encodeURIComponent(cnpj)}`);
+}
+
+export async function rebuildRuntimeProdutos(cnpj: string) {
+  return request<{ success: boolean; message: string; rows: number; runtime: ProdutoRuntimeStatusResponse["runtime"] }>(
+    "/produtos/rebuild-runtime",
+    {
+      method: "POST",
+      body: JSON.stringify({ cnpj }),
+    }
+  );
+}
+
 export async function clearVectorizacaoCache(cnpj: string, metodo: "semantic" | "hybrid" | "all" = "all") {
   return request<{ success: boolean; message: string; removed: string[] }>(
     `/produtos/vectorizacao-clear-cache?cnpj=${encodeURIComponent(cnpj)}&metodo=${encodeURIComponent(metodo)}`,

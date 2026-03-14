@@ -24,6 +24,21 @@ DESCRIPTION_MANUAL_MAP_COLUMNS = [
 ]
 
 _VECTOR_MODEL_NAME = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+_DETAIL_COLUMNS = [
+    "fonte",
+    "codigo",
+    "descricao",
+    "descr_compl",
+    "tipo_item",
+    "ncm",
+    "cest",
+    "gtin",
+    "unid",
+    "codigo_original",
+    "descricao_original",
+    "tipo_item_original",
+    "hash_manual_key",
+]
 
 
 def produto_pipeline_em_modo_compatibilidade() -> bool:
@@ -61,6 +76,34 @@ def _canon_text(value: Any, vazio: str = "(VAZIO)") -> str:
     text = "" if value is None else str(value)
     text = text.strip().upper()
     return text if text else vazio
+
+
+def _clean_value(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _clean_gtin(value: Any) -> str:
+    text = _clean_value(value).upper()
+    if text in {"SEM GTIN", "NO GTIN", "(NULL)", "(NULO)", "NULL", "NONE"}:
+        return ""
+    return _clean_value(value)
+
+
+def _consensus(values: list[str]) -> str:
+    counts: dict[str, int] = {}
+    for value in values:
+        text = _clean_value(value)
+        if not text:
+            continue
+        counts[text] = counts.get(text, 0) + 1
+    if not counts:
+        return ""
+    return sorted(counts.items(), key=lambda item: (-item[1], item[0]))[0][0]
+
+
+def _join_unique(values: list[str], sep: str = ", ") -> str:
+    uniq = sorted({_clean_value(value) for value in values if _clean_value(value)})
+    return sep.join(uniq)
 
 
 def _normalize_similarity_text(value: Any) -> str:
@@ -558,19 +601,37 @@ def unificar_produtos_unidades(cnpj: str, projeto_dir: Path | None = None) -> pl
     spec = importlib.util.spec_from_file_location("sefin_config_local", str(config_path))
     sefin_config = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(sefin_config)
-    _, dir_analises, _ = sefin_config.obter_diretorios_cnpj(cnpj)
+    dir_parquet, dir_analises, _ = sefin_config.obter_diretorios_cnpj(cnpj)
     produtos_path = dir_analises / f"produtos_agregados_{cnpj}.parquet"
-    if produtos_path.exists():
-        logger.warning(
-            "[produto_runtime] usando modo de compatibilidade sem pipeline legado de produtos para %s",
-            cnpj,
-        )
-        return pl.read_parquet(str(produtos_path))
-    logger.warning(
-        "[produto_runtime] pipeline legado de produtos removido e nenhum parquet agregado existe para %s",
-        cnpj,
-    )
-    return _empty_produtos_result()
+    base_detalhes_path = dir_analises / f"base_detalhes_produtos_{cnpj}.parquet"
+    indexados_path = dir_analises / f"produtos_indexados_{cnpj}.parquet"
+    codigos_path = dir_analises / f"codigos_multidescricao_{cnpj}.parquet"
+    variacoes_path = dir_analises / f"variacoes_produtos_{cnpj}.parquet"
+
+    logger.warning("[produto_runtime] reconstruindo pipeline de produtos em modo de compatibilidade ativa para %s", cnpj)
+
+    df_base = _carregar_base_detalhes(dir_parquet)
+    if df_base.is_empty():
+        empty = _empty_produtos_result()
+        empty.write_parquet(str(produtos_path))
+        pl.DataFrame(schema={c: pl.Utf8 for c in _DETAIL_COLUMNS}).write_parquet(str(base_detalhes_path))
+        _build_produtos_indexados(pl.DataFrame(schema={c: pl.Utf8 for c in _DETAIL_COLUMNS}), empty).write_parquet(str(indexados_path))
+        _build_codigos_multidescricao(pl.DataFrame(schema={"codigo": pl.Utf8})).write_parquet(str(codigos_path))
+        _build_variacoes_produtos(pl.DataFrame(schema={c: pl.Utf8 for c in _DETAIL_COLUMNS})).write_parquet(str(variacoes_path))
+        return empty
+
+    df_base = _aplicar_mapas_manuais(df_base, dir_analises, cnpj)
+    df_agregados = _build_produtos_agregados(df_base)
+    df_indexados = _build_produtos_indexados(df_base, df_agregados)
+    df_codigos = _build_codigos_multidescricao(df_indexados)
+    df_variacoes = _build_variacoes_produtos(df_base)
+
+    df_base.write_parquet(str(base_detalhes_path))
+    df_agregados.write_parquet(str(produtos_path))
+    df_indexados.write_parquet(str(indexados_path))
+    df_codigos.write_parquet(str(codigos_path))
+    df_variacoes.write_parquet(str(variacoes_path))
+    return df_agregados
 
 
 def _normalize_mapa_descricoes_manual(df: pl.DataFrame, default_acao: str = "AGREGAR") -> pl.DataFrame:
@@ -615,3 +676,409 @@ def merge_mapa_descricoes_manual(mapa_path: str | Path, df_novo: pl.DataFrame, d
         merged.write_parquet(str(mapa_path))
     else:
         novo.write_parquet(str(mapa_path))
+
+
+def _source_frame_rows(path: Path, fonte: str, mappings: dict[str, str]) -> pl.DataFrame:
+    if not path.exists():
+        return pl.DataFrame(schema={c: pl.Utf8 for c in _DETAIL_COLUMNS})
+    df = pl.read_parquet(str(path))
+    rows: list[dict[str, Any]] = []
+    for row in df.to_dicts():
+        codigo = _clean_value(row.get(mappings.get("codigo", "")))
+        descricao = _clean_value(row.get(mappings.get("descricao", "")))
+        if not codigo or not descricao:
+            continue
+        tipo_item = _clean_value(row.get(mappings.get("tipo_item", "")))
+        rows.append(
+            {
+                "fonte": fonte,
+                "codigo": codigo,
+                "descricao": descricao,
+                "descr_compl": _clean_value(row.get(mappings.get("descr_compl", ""))),
+                "tipo_item": tipo_item,
+                "ncm": _clean_value(row.get(mappings.get("ncm", ""))),
+                "cest": _clean_value(row.get(mappings.get("cest", ""))),
+                "gtin": _clean_gtin(row.get(mappings.get("gtin", ""))),
+                "unid": _clean_value(row.get(mappings.get("unid", ""))),
+                "codigo_original": codigo,
+                "descricao_original": descricao,
+                "tipo_item_original": tipo_item,
+                "hash_manual_key": "",
+            }
+        )
+    return pl.DataFrame(rows).select(_DETAIL_COLUMNS) if rows else pl.DataFrame(schema={c: pl.Utf8 for c in _DETAIL_COLUMNS})
+
+
+def _carregar_base_detalhes(dir_parquet: Path) -> pl.DataFrame:
+    frames = [
+        _source_frame_rows(
+            dir_parquet / next((p.name for p in dir_parquet.glob("NFe_*.parquet")), "__missing__"),
+            "NFE",
+            {
+                "codigo": "prod_cprod",
+                "descricao": "prod_xprod",
+                "ncm": "prod_ncm",
+                "cest": "prod_cest",
+                "gtin": "prod_cean",
+                "unid": "prod_ucom",
+            },
+        ),
+        _source_frame_rows(
+            dir_parquet / next((p.name for p in dir_parquet.glob("NFCe_*.parquet")), "__missing__"),
+            "NFCE",
+            {
+                "codigo": "prod_cprod",
+                "descricao": "prod_xprod",
+                "ncm": "prod_ncm",
+                "cest": "prod_cest",
+                "gtin": "prod_cean",
+                "unid": "prod_ucom",
+            },
+        ),
+        _source_frame_rows(
+            dir_parquet / next((p.name for p in dir_parquet.glob("c170_simplificada_*.parquet")), "__missing__"),
+            "C170",
+            {
+                "codigo": "cod_item",
+                "descricao": "descr_item",
+                "descr_compl": "descr_compl",
+                "tipo_item": "tipo_item",
+                "ncm": "cod_ncm",
+                "cest": "cest",
+                "gtin": "cod_barra",
+                "unid": "unid",
+            },
+        ),
+        _source_frame_rows(
+            dir_parquet / next((p.name for p in dir_parquet.glob("reg_0200_*.parquet")), "__missing__"),
+            "REG0200",
+            {
+                "codigo": "cod_item",
+                "descricao": "descr_item",
+                "tipo_item": "tipo_item",
+                "ncm": "cod_ncm",
+                "cest": "cest",
+                "gtin": "cod_barra",
+                "unid": "unid_inv",
+            },
+        ),
+        _source_frame_rows(
+            dir_parquet / next((p.name for p in dir_parquet.glob("bloco_h_*.parquet")), "__missing__"),
+            "BLOCO_H",
+            {
+                "codigo": "codigo_produto",
+                "descricao": "descricao_produto",
+                "descr_compl": "obs_complementar",
+                "tipo_item": "tipo_item",
+                "ncm": "cod_ncm",
+                "cest": "cest",
+                "gtin": "cod_barra",
+                "unid": "unidade_medida",
+            },
+        ),
+    ]
+    non_empty = [frame for frame in frames if not frame.is_empty()]
+    if not non_empty:
+        return pl.DataFrame(schema={c: pl.Utf8 for c in _DETAIL_COLUMNS})
+    df = pl.concat(non_empty, how="diagonal_relaxed")
+    return df.with_columns(
+        [
+            pl.col("fonte").cast(pl.Utf8),
+            pl.col("codigo").cast(pl.Utf8),
+            pl.col("descricao").cast(pl.Utf8),
+            pl.col("descr_compl").cast(pl.Utf8).fill_null(""),
+            pl.col("tipo_item").cast(pl.Utf8).fill_null(""),
+            pl.col("ncm").cast(pl.Utf8).fill_null(""),
+            pl.col("cest").cast(pl.Utf8).fill_null(""),
+            pl.col("gtin").cast(pl.Utf8).fill_null(""),
+            pl.col("unid").cast(pl.Utf8).fill_null(""),
+            pl.col("codigo_original").cast(pl.Utf8),
+            pl.col("descricao_original").cast(pl.Utf8),
+            pl.col("tipo_item_original").cast(pl.Utf8).fill_null(""),
+        ]
+    ).with_columns(
+        pl.struct(["fonte", "codigo_original", "descricao_original", "tipo_item_original"]).map_elements(
+            lambda item: hashlib.sha1(
+                "|".join(
+                    [
+                        _canon_text(item["fonte"], ""),
+                        _canon_text(item["codigo_original"], ""),
+                        _canon_text(item["descricao_original"]),
+                        _canon_text(item["tipo_item_original"]),
+                    ]
+                ).encode("utf-8")
+            ).hexdigest(),
+            return_dtype=pl.Utf8,
+        ).alias("hash_manual_key")
+    )
+
+
+def _resolve_description_unions(mapa_descricoes_path: Path) -> dict[str, str]:
+    if not mapa_descricoes_path.exists():
+        return {}
+    df = _normalize_mapa_descricoes_manual(pl.read_parquet(str(mapa_descricoes_path)))
+    parent: dict[str, str] = {}
+    for row in df.to_dicts():
+        if row.get("tipo_regra") != "UNIR_GRUPOS":
+            continue
+        origem = _canon_text(row.get("descricao_origem"), "")
+        destino = _canon_text(row.get("descricao_destino"), "")
+        if origem and destino:
+            parent[origem] = destino
+
+    def resolve(text: str) -> str:
+        seen: set[str] = set()
+        current = text
+        while current in parent and current not in seen:
+            seen.add(current)
+            current = parent[current]
+        return current
+
+    return {key: resolve(key) for key in list(parent)}
+
+
+def _aplicar_mapas_manuais(df_base: pl.DataFrame, dir_analises: Path, cnpj: str) -> pl.DataFrame:
+    if df_base.is_empty():
+        return df_base
+
+    mapa_descricoes_path = dir_analises / f"mapa_manual_descricoes_{cnpj}.parquet"
+    mapa_manual_path = dir_analises / f"mapa_manual_unificacao_{cnpj}.parquet"
+
+    unions = _resolve_description_unions(mapa_descricoes_path)
+    if unions:
+        df_base = df_base.with_columns(
+            pl.col("descricao").map_elements(
+                lambda value: unions.get(_canon_text(value, ""), _clean_value(value)),
+                return_dtype=pl.Utf8,
+            )
+        )
+
+    if mapa_manual_path.exists():
+        mapa = pl.read_parquet(str(mapa_manual_path))
+        for col in [
+            "hash_manual_key",
+            "codigo_novo",
+            "descricao_nova",
+            "ncm_novo",
+            "cest_novo",
+            "gtin_novo",
+            "tipo_item_novo",
+        ]:
+            if col not in mapa.columns:
+                mapa = mapa.with_columns(pl.lit("").alias(col))
+        mapa = mapa.select(
+            [
+                pl.col("hash_manual_key").cast(pl.Utf8),
+                pl.col("codigo_novo").cast(pl.Utf8).alias("__codigo_novo"),
+                pl.col("descricao_nova").cast(pl.Utf8).alias("__descricao_nova"),
+                pl.col("ncm_novo").cast(pl.Utf8).alias("__ncm_novo"),
+                pl.col("cest_novo").cast(pl.Utf8).alias("__cest_novo"),
+                pl.col("gtin_novo").cast(pl.Utf8).alias("__gtin_novo"),
+                pl.col("tipo_item_novo").cast(pl.Utf8).alias("__tipo_item_novo"),
+            ]
+        ).unique(subset=["hash_manual_key"], keep="last")
+        df_base = df_base.join(mapa, on="hash_manual_key", how="left").with_columns(
+            [
+                pl.when(pl.col("__codigo_novo").is_not_null() & (pl.col("__codigo_novo") != ""))
+                .then(pl.col("__codigo_novo"))
+                .otherwise(pl.col("codigo"))
+                .alias("codigo"),
+                pl.when(pl.col("__descricao_nova").is_not_null() & (pl.col("__descricao_nova") != ""))
+                .then(pl.col("__descricao_nova"))
+                .otherwise(pl.col("descricao"))
+                .alias("descricao"),
+                pl.when(pl.col("__ncm_novo").is_not_null() & (pl.col("__ncm_novo") != ""))
+                .then(pl.col("__ncm_novo"))
+                .otherwise(pl.col("ncm"))
+                .alias("ncm"),
+                pl.when(pl.col("__cest_novo").is_not_null() & (pl.col("__cest_novo") != ""))
+                .then(pl.col("__cest_novo"))
+                .otherwise(pl.col("cest"))
+                .alias("cest"),
+                pl.when(pl.col("__gtin_novo").is_not_null() & (pl.col("__gtin_novo") != ""))
+                .then(pl.col("__gtin_novo"))
+                .otherwise(pl.col("gtin"))
+                .alias("gtin"),
+                pl.when(pl.col("__tipo_item_novo").is_not_null() & (pl.col("__tipo_item_novo") != ""))
+                .then(pl.col("__tipo_item_novo"))
+                .otherwise(pl.col("tipo_item"))
+                .alias("tipo_item"),
+            ]
+        ).drop([c for c in df_base.columns if c.startswith("__")], strict=False)
+    return df_base
+
+
+def _build_produtos_agregados(df_base: pl.DataFrame) -> pl.DataFrame:
+    if df_base.is_empty():
+        return pl.DataFrame(
+            schema={
+                "chave_produto": pl.Utf8,
+                "descricao": pl.Utf8,
+                "lista_descricao": pl.Utf8,
+                "qtd_descricoes": pl.Int64,
+                "qtd_codigos": pl.Int64,
+                "ncm_consenso": pl.Utf8,
+                "cest_consenso": pl.Utf8,
+                "gtin_consenso": pl.Utf8,
+                "tipo_item_consenso": pl.Utf8,
+                "codigo_consenso": pl.Utf8,
+                "lista_unid": pl.Utf8,
+                "descricoes_conflitantes": pl.Utf8,
+                "requer_revisao_manual": pl.Boolean,
+            }
+        )
+
+    rows: list[dict[str, Any]] = []
+    for idx, row in enumerate(
+        df_base.group_by("descricao").agg(
+            [
+                pl.col("codigo").drop_nulls().cast(pl.Utf8).alias("__codigos"),
+                pl.col("ncm").drop_nulls().cast(pl.Utf8).alias("__ncm"),
+                pl.col("cest").drop_nulls().cast(pl.Utf8).alias("__cest"),
+                pl.col("gtin").drop_nulls().cast(pl.Utf8).alias("__gtin"),
+                pl.col("tipo_item").drop_nulls().cast(pl.Utf8).alias("__tipo_item"),
+                pl.col("unid").drop_nulls().cast(pl.Utf8).alias("__unid"),
+            ]
+        ).sort("descricao").to_dicts(),
+        start=1,
+    ):
+        codigos = [item for item in row.get("__codigos", []) if _clean_value(item)]
+        ncm_values = [item for item in row.get("__ncm", []) if _clean_value(item)]
+        cest_values = [item for item in row.get("__cest", []) if _clean_value(item)]
+        gtin_values = [item for item in row.get("__gtin", []) if _clean_value(item)]
+        tipo_values = [item for item in row.get("__tipo_item", []) if _clean_value(item)]
+        unid_values = [item for item in row.get("__unid", []) if _clean_value(item)]
+        conflicts = []
+        if len(set(codigos)) > 1:
+            conflicts.append("CODIGO")
+        if len(set(ncm_values)) > 1:
+            conflicts.append("NCM")
+        if len(set(cest_values)) > 1:
+            conflicts.append("CEST")
+        if len(set(gtin_values)) > 1:
+            conflicts.append("GTIN")
+        if len(set(tipo_values)) > 1:
+            conflicts.append("TIPO_ITEM")
+        rows.append(
+            {
+                "chave_produto": f"ID_{idx:04d}",
+                "descricao": _clean_value(row.get("descricao")),
+                "lista_descricao": _clean_value(row.get("descricao")),
+                "qtd_descricoes": 1,
+                "qtd_codigos": len(set(codigos)),
+                "ncm_consenso": _consensus(ncm_values),
+                "cest_consenso": _consensus(cest_values),
+                "gtin_consenso": _consensus(gtin_values),
+                "tipo_item_consenso": _consensus(tipo_values),
+                "codigo_consenso": _consensus(codigos),
+                "lista_unid": _join_unique(unid_values),
+                "descricoes_conflitantes": ", ".join(conflicts),
+                "requer_revisao_manual": bool(conflicts),
+            }
+        )
+    return pl.DataFrame(rows)
+
+
+def _build_produtos_indexados(df_base: pl.DataFrame, df_agregados: pl.DataFrame) -> pl.DataFrame:
+    if df_base.is_empty():
+        return pl.DataFrame(
+            schema={
+                "chave_produto": pl.Utf8,
+                "codigo": pl.Utf8,
+                "descricao": pl.Utf8,
+                "descr_compl": pl.Utf8,
+                "tipo_item": pl.Utf8,
+                "ncm": pl.Utf8,
+                "cest": pl.Utf8,
+                "gtin": pl.Utf8,
+                "lista_unidades": pl.Utf8,
+                "lista_fontes": pl.Utf8,
+                "qtd_linhas": pl.Int64,
+            }
+        )
+    chave_map = df_agregados.select(["descricao", "chave_produto"])
+    joined = df_base.join(chave_map, on="descricao", how="left")
+    return (
+        joined.group_by(["chave_produto", "codigo", "descricao", "descr_compl", "tipo_item", "ncm", "cest", "gtin"])
+        .agg(
+            [
+                pl.len().cast(pl.Int64).alias("qtd_linhas"),
+                pl.col("unid").drop_nulls().cast(pl.Utf8).unique().sort().alias("__unidades"),
+                pl.col("fonte").drop_nulls().cast(pl.Utf8).unique().sort().alias("__fontes"),
+            ]
+        )
+        .with_columns(
+            [
+                pl.col("__unidades").list.join(", ").alias("lista_unidades"),
+                pl.col("__fontes").list.join(", ").alias("lista_fontes"),
+            ]
+        )
+        .drop(["__unidades", "__fontes"])
+        .sort(["chave_produto", "codigo", "descricao"])
+    )
+
+
+def _build_codigos_multidescricao(df_indexados: pl.DataFrame) -> pl.DataFrame:
+    if df_indexados.is_empty():
+        return pl.DataFrame(
+            schema={
+                "codigo": pl.Utf8,
+                "qtd_descricoes": pl.Int64,
+                "lista_descricoes": pl.Utf8,
+                "lista_ncm": pl.Utf8,
+                "lista_cest": pl.Utf8,
+                "lista_gtin": pl.Utf8,
+                "lista_tipo_item": pl.Utf8,
+                "lista_chave_produto": pl.Utf8,
+                "qtd_grupos_descricao_afetados": pl.Int64,
+                "lista_descr_compl": pl.Utf8,
+            }
+        )
+    grouped = (
+        df_indexados.group_by("codigo")
+        .agg(
+            [
+                pl.col("descricao").drop_nulls().cast(pl.Utf8).unique().sort().alias("__descricoes"),
+                pl.col("ncm").drop_nulls().cast(pl.Utf8).unique().sort().alias("__ncm"),
+                pl.col("cest").drop_nulls().cast(pl.Utf8).unique().sort().alias("__cest"),
+                pl.col("gtin").drop_nulls().cast(pl.Utf8).unique().sort().alias("__gtin"),
+                pl.col("tipo_item").drop_nulls().cast(pl.Utf8).unique().sort().alias("__tipo"),
+                pl.col("chave_produto").drop_nulls().cast(pl.Utf8).unique().sort().alias("__chaves"),
+                pl.col("descr_compl").drop_nulls().cast(pl.Utf8).unique().sort().alias("__compl"),
+            ]
+        )
+        .with_columns(pl.col("__descricoes").list.len().cast(pl.Int64).alias("qtd_descricoes"))
+        .filter(pl.col("qtd_descricoes") > 1)
+        .with_columns(
+            [
+                pl.col("__descricoes").list.join("<<#>>").alias("lista_descricoes"),
+                pl.col("__ncm").list.join(", ").alias("lista_ncm"),
+                pl.col("__cest").list.join(", ").alias("lista_cest"),
+                pl.col("__gtin").list.join(", ").alias("lista_gtin"),
+                pl.col("__tipo").list.join(", ").alias("lista_tipo_item"),
+                pl.col("__chaves").list.join(", ").alias("lista_chave_produto"),
+                pl.col("__compl").list.join(" | ").alias("lista_descr_compl"),
+                pl.col("__chaves").list.len().cast(pl.Int64).alias("qtd_grupos_descricao_afetados"),
+            ]
+        )
+        .drop(["__descricoes", "__ncm", "__cest", "__gtin", "__tipo", "__chaves", "__compl"])
+        .sort("codigo")
+    )
+    return grouped
+
+
+def _build_variacoes_produtos(df_base: pl.DataFrame) -> pl.DataFrame:
+    if df_base.is_empty():
+        return pl.DataFrame(schema={"descricao": pl.Utf8, "qtd_codigos": pl.Int64, "qtd_ncm": pl.Int64, "qtd_gtin": pl.Int64})
+    return (
+        df_base.group_by("descricao")
+        .agg(
+            [
+                pl.col("codigo").n_unique().cast(pl.Int64).alias("qtd_codigos"),
+                pl.col("ncm").n_unique().cast(pl.Int64).alias("qtd_ncm"),
+                pl.col("gtin").n_unique().cast(pl.Int64).alias("qtd_gtin"),
+            ]
+        )
+        .filter((pl.col("qtd_codigos") > 1) | (pl.col("qtd_ncm") > 1) | (pl.col("qtd_gtin") > 1))
+        .sort(["qtd_codigos", "qtd_ncm", "qtd_gtin"], descending=[True, True, True])
+    )

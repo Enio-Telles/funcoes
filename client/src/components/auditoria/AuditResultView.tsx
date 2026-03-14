@@ -27,7 +27,7 @@ import {
 } from "lucide-react";
 import { useLocation } from "wouter";
 import type { AuditPipelineResponse, AuditFileResult, ProdutoAnaliseStatusResumo } from "@/lib/pythonApi";
-import { clearVectorizacaoCache, downloadRevisaoManualExcel, getParesGruposSimilares, getStatusAnaliseProdutos, getVectorizacaoStatus } from "@/lib/pythonApi";
+import { clearVectorizacaoCache, downloadRevisaoManualExcel, getParesGruposSimilares, getRuntimeProdutosStatus, getStatusAnaliseProdutos, getVectorizacaoStatus, rebuildRuntimeProdutos } from "@/lib/pythonApi";
 
 interface AuditResultViewProps {
   result: AuditPipelineResponse;
@@ -48,6 +48,11 @@ export function AuditResultView({ result, elapsed }: AuditResultViewProps) {
   const [downloadingRevisao, setDownloadingRevisao] = useState(false);
   const [downloadMsg, setDownloadMsg] = useState<string | null>(null);
   const [statusResumo, setStatusResumo] = useState<ProdutoAnaliseStatusResumo | null>(null);
+  const [runtimeStatus, setRuntimeStatus] = useState<{
+    compat_mode: boolean;
+    pipeline_legacy_removed: boolean;
+    files: Record<string, { path: string; exists: boolean; size_bytes?: number }>;
+  } | null>(null);
   const [vectorStatus, setVectorStatus] = useState<{
     available: boolean;
     message: string;
@@ -57,6 +62,7 @@ export function AuditResultView({ result, elapsed }: AuditResultViewProps) {
   const [vectorCaches, setVectorCaches] = useState<{ semantic?: Record<string, unknown>; hybrid?: Record<string, unknown> } | null>(null);
   const [currentBaseHash, setCurrentBaseHash] = useState<string | null>(null);
   const [vectorLoading, setVectorLoading] = useState(false);
+  const [runtimeLoading, setRuntimeLoading] = useState(false);
   const vectorEngine = String(vectorStatus?.engine || "").toUpperCase();
   const vectorEngineIsFaiss = vectorEngine === "FAISS";
   const vectorEngineIsNumpy = vectorEngine === "NUMPY";
@@ -88,6 +94,18 @@ export function AuditResultView({ result, elapsed }: AuditResultViewProps) {
       .catch(() => {
         if (active) {
           setStatusResumo(null);
+        }
+      });
+
+    getRuntimeProdutosStatus(cleanCnpj)
+      .then((res) => {
+        if (active) {
+          setRuntimeStatus(res.runtime || null);
+        }
+      })
+      .catch(() => {
+        if (active) {
+          setRuntimeStatus(null);
         }
       });
 
@@ -148,6 +166,17 @@ export function AuditResultView({ result, elapsed }: AuditResultViewProps) {
     }
   };
 
+  const refreshRuntimeStatus = async () => {
+    if (!result.cnpj) return;
+    const cleanCnpj = result.cnpj.replace(/\D/g, "");
+    try {
+      const res = await getRuntimeProdutosStatus(cleanCnpj);
+      setRuntimeStatus(res.runtime || null);
+    } catch {
+      setRuntimeStatus(null);
+    }
+  };
+
   const handleRecalculateSemantic = async () => {
     if (!result.cnpj) return;
     const cleanCnpj = result.cnpj.replace(/\D/g, "");
@@ -200,6 +229,25 @@ export function AuditResultView({ result, elapsed }: AuditResultViewProps) {
       setDownloadMsg(err?.message || "Erro ao limpar cache vetorizado");
     } finally {
       setVectorLoading(false);
+      setTimeout(() => setDownloadMsg(null), 4000);
+    }
+  };
+
+  const handleRebuildProdutos = async () => {
+    if (!result.cnpj) return;
+    const cleanCnpj = result.cnpj.replace(/\D/g, "");
+    setRuntimeLoading(true);
+    try {
+      const res = await rebuildRuntimeProdutos(cleanCnpj);
+      setRuntimeStatus(res.runtime || null);
+      const statusRes = await getStatusAnaliseProdutos(cleanCnpj);
+      setStatusResumo(statusRes.resumo || null);
+      setDownloadMsg(`Pipeline de produtos reprocessado (${res.rows} grupos).`);
+      await refreshVectorStatus();
+    } catch (err: any) {
+      setDownloadMsg(err?.message || "Erro ao reprocessar produtos");
+    } finally {
+      setRuntimeLoading(false);
       setTimeout(() => setDownloadMsg(null), 4000);
     }
   };
@@ -366,6 +414,37 @@ export function AuditResultView({ result, elapsed }: AuditResultViewProps) {
                 ))}
               </div>
 
+              <div className={`rounded-lg border px-3 py-3 ${runtimeStatus?.compat_mode ? "border-sky-200 bg-sky-50" : "bg-white"}`}>
+                <div className="mb-1 text-[11px] font-semibold text-slate-500">Runtime de produtos</div>
+                <div className="text-sm text-slate-700">
+                  {runtimeStatus ? (
+                    <>
+                      <span>Modo: <strong>{runtimeStatus.compat_mode ? "compatibilidade ativa" : "pipeline padrao"}</strong>.</span>
+                      {runtimeStatus.pipeline_legacy_removed ? <span className="ml-2">Pipeline legado removido.</span> : null}
+                    </>
+                  ) : (
+                    <span>Status nao carregado.</span>
+                  )}
+                </div>
+                {runtimeStatus ? (
+                  <div className="mt-2 text-xs text-slate-500">
+                    Artefatos disponiveis: {Object.values(runtimeStatus.files || {}).filter((item) => item.exists).length}/{Object.keys(runtimeStatus.files || {}).length}
+                  </div>
+                ) : null}
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {runtimeStatus
+                    ? Object.entries(runtimeStatus.files || {}).slice(0, 6).map(([key, item]) => (
+                        <span
+                          key={key}
+                          className={`inline-flex rounded-full px-2 py-1 text-[11px] font-medium ${item.exists ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-600"}`}
+                        >
+                          {key.replaceAll("_", " ")}
+                        </span>
+                      ))
+                    : null}
+                </div>
+              </div>
+
               <div
                 className={`rounded-lg border px-3 py-3 ${
                   vectorCaches?.semantic?.stale || vectorCaches?.hybrid?.stale
@@ -498,6 +577,29 @@ export function AuditResultView({ result, elapsed }: AuditResultViewProps) {
                   >
                     <MousePointerClick className="h-3.5 w-3.5" />
                     Consolidacao por selecao
+                  </Button>
+                </ActionGroup>
+
+                <ActionGroup title="Pipeline">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-8 gap-1.5"
+                    onClick={handleRebuildProdutos}
+                    disabled={runtimeLoading}
+                  >
+                    {runtimeLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+                    Reprocessar produtos
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-8 gap-1.5"
+                    onClick={refreshRuntimeStatus}
+                    disabled={runtimeLoading}
+                  >
+                    <RefreshCw className="h-3.5 w-3.5" />
+                    Atualizar runtime
                   </Button>
                 </ActionGroup>
 

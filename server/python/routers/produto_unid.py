@@ -877,6 +877,33 @@ async def get_runtime_produtos_status(cnpj: str = Query(...)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.post("/produtos/rebuild-runtime")
+async def rebuild_runtime_produtos(req: ProdutoUnidRequest):
+    cnpj_limpo = re.sub(r"[^0-9]", "", req.cnpj)
+    if not cnpj_limpo or not validar_cnpj(cnpj_limpo):
+        raise HTTPException(status_code=400, detail="CNPJ invalido")
+    try:
+        import importlib.util
+
+        _config_path = _PROJETO_DIR / "config.py"
+        _spec = importlib.util.spec_from_file_location("sefin_config_local", str(_config_path))
+        _sefin_config = importlib.util.module_from_spec(_spec)
+        _spec.loader.exec_module(_sefin_config)
+
+        _, dir_analises, _ = _sefin_config.obter_diretorios_cnpj(cnpj_limpo)
+        df = _reprocessar_produtos(dir_analises, cnpj_limpo)
+        runtime = obter_runtime_produtos_status(dir_analises, cnpj_limpo)
+        return {
+            "success": True,
+            "message": "Pipeline de produtos reconstruido com sucesso.",
+            "rows": int(df.height),
+            "runtime": runtime,
+        }
+    except Exception as e:
+        logger.error("[rebuild_runtime_produtos] Erro: %s\n%s", e, traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/produtos/vectorizacao-clear-cache")
 async def clear_vectorizacao_cache(cnpj: str = Query(...), metodo: str = Query("all")):
     cnpj_limpo = re.sub(r"[^0-9]", "", cnpj)
