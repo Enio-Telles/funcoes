@@ -1,251 +1,224 @@
+from __future__ import annotations
+
+import argparse
 import os
-import sys
 import shutil
 import socket
 import subprocess
-from typing import List, Optional
+import sys
+import time
+import webbrowser
+from pathlib import Path
 
 
-def check_command_exists(cmd: str) -> bool:
-    """Return True if command exists and responds to --version, else False."""
-    try:
-        subprocess.run([cmd, "--version"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True, shell=(os.name == 'nt'))
-        return True
-    except Exception:
-        return False
+ROOT_DIR = Path(__file__).resolve().parent
+SERVER_PYTHON_DIR = ROOT_DIR / "server" / "python"
+DEFAULT_NODE_PORT = 3000
+DEFAULT_PYTHON_PORT = 8001
+DEFAULT_CONDA_ENV = "audit"
 
 
-def is_port_free(port: int, host: str = "127.0.0.1") -> bool:
-    """Check if TCP port is available on host."""
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.settimeout(0.5)
-        result = s.connect_ex((host, port))
-        return result != 0
+def info(message: str) -> None:
+    print(f"[INFO] {message}")
 
 
-def run(cmd: List[str], friendly: str, check: bool = True, use_shell: Optional[bool] = None) -> int:
-    """Run a subprocess with friendly logs. Returns exit code. Raises only if check=True and non-zero.
-
-    This wrapper prints clear start/end messages and avoids throwing opaque stack traces.
-    """
-    if use_shell is None:
-        use_shell = os.name == 'nt'
-    print(f"\n> {friendly}: {' '.join(cmd)}")
-    try:
-        res = subprocess.run(cmd, text=True, shell=use_shell)
-        if res.returncode == 0:
-            print(f"[v] {friendly} concluído.")
-        if res.returncode != 0:
-            if check:
-                # Provide a hint rather than raising raw exception
-                print("[i] Non-zero output. Check your environment/network.")
-        return res.returncode
-    except FileNotFoundError:
-        print(f"[x] {friendly} failed: command not found ({cmd[0]}).")
-        return 127
-    except subprocess.CalledProcessError as e:
-        print(f"[x] {friendly} failed: {e}")
-        return e.returncode
-    except Exception as e:
-        print(f"[x] {friendly} failed (unexpected error): {e}")
-        return 1
+def warn(message: str) -> None:
+    print(f"[WARN] {message}")
 
 
-def ensure_env_file():
-    """Create a minimal .env if it doesn't exist."""
-    if not os.path.exists(".env"):
-        try:
-            with open(".env", "w", encoding="utf-8") as f:
-                f.write("DATABASE_URL=file:./sefin_audit.db\n")
-                f.write("PYTHON_API_PORT=8001\n")
-                f.write("PORT=3000\n")
-                f.write("OAUTH_SERVER_URL=http://localhost:3000/mock-oauth\n")
-                f.write("VITE_OAUTH_PORTAL_URL=http://localhost:3000/mock-oauth\n")
-                f.write("VITE_APP_ID=sefin-audit-tool\n")
-                f.write("VITE_ANALYTICS_ENDPOINT=mock-endpoint\n")
-                f.write("VITE_ANALYTICS_WEBSITE_ID=mock-id\n")
-            print("[v] .env created.")
-        except PermissionError:
-            print("[x] Permission denied creating .env. Run terminal as Administrator.")
-        except Exception as e:
-            print(f"[x] Failed to create .env: {e}")
-    else:
-        print("[v] .env already exists.")
+def fail(message: str, code: int = 1) -> None:
+    print(f"[ERRO] {message}")
+    raise SystemExit(code)
 
 
-def ensure_conda_env(env_name: str = "audit") -> bool:
-    """Ensure conda env exists. Create if missing. Return True if ready, else False."""
-    use_shell = os.name == 'nt'
-    try:
-        envs_out = subprocess.run(["conda", "env", "list"], capture_output=True, text=True, shell=use_shell, check=True)
-        envs = [line.split()[0] for line in envs_out.stdout.splitlines() if line and not line.startswith('#')]
-    except subprocess.CalledProcessError as e:
-        print("[x] Failed to query Conda environments.")
-        print(e.stdout or e.stderr)
-        return False
-
-    if env_name not in envs:
-        code = run(["conda", "create", "-n", env_name, "python=3.11", "-y"], f"Criar ambiente conda '{env_name}'", check=False)
-        if code != 0:
-            print("[!] Check conda channels/mirrors. Try: conda clean -a")
-            return False
-    else:
-        print(f"[v] Conda environment '{env_name}' found.")
-
-    # Sanity check python inside env
-    code = run(["conda", "run", "-n", env_name, "python", "-c", "import sys; print(sys.version)"],
-               f"Sanity check Python no ambiente '{env_name}'", check=False)
-    if code != 0:
-        print(f"[x] Environment '{env_name}' seems corrupted. Try removing and recreating: conda remove -n {env_name} --all")
-        return False
-
-    return True
+def command_exists(command: str) -> bool:
+    return shutil.which(command) is not None
 
 
-def install_python_libs(env_name: str = "audit") -> bool:
-    """Install required Python libs inside the conda env. Return True on success."""
-    use_shell = os.name == 'nt'
-    # Upgrade pip
-    code = run(["conda", "run", "-n", env_name, "python", "-m", "pip", "install", "--upgrade", "pip"], "Atualizar pip", check=False)
-    if code != 0:
-        return False
-
-    libs = [
-        "polars",
-        "pandas",
-        "oracledb",
-        "fastapi",
-        "uvicorn",
-        "python-docx",
-        "openpyxl",
-        "xlsxwriter",
-        "pyarrow",
-        "python-multipart",
-        "keyring",
-        "python-dotenv",
-    ]
-
-    code = run(["conda", "run", "-n", env_name, "python", "-m", "pip", "install"] + libs, "Instalar bibliotecas Python", check=False)
-    if code != 0:
-        print("[!] If 'oracledb' fails, install Oracle Instant Client and adjust PATH.")
-        # Don't return False immediately; other libs might be OK.
-    else:
-        print("[v] Python libraries installed.")
-
-    return True
+def is_port_open(port: int, host: str = "127.0.0.1") -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(0.5)
+        return sock.connect_ex((host, port)) == 0
 
 
-def ensure_node_pnpm() -> bool:
-    """Ensure Node and PNPM available. Install PNPM globally via npm if missing. Return True when ready."""
-    if not check_command_exists("node"):
-        print("❌ Node.js não encontrado. Instale Node 18+ e adicione ao PATH.")
-        return False
-
-    if not check_command_exists("pnpm"):
-        print("ℹ️  Instalando pnpm globalmente via npm...")
-        code = run(["npm", "install", "-g", "pnpm"], "Instalar pnpm (global)", check=False)
-        if code != 0:
-            print("❌ Falha ao instalar pnpm globalmente. Instale manualmente ou verifique seu npm/PATH.")
-            return False
-
-    code = run(["pnpm", "install"], "Instalar dependências Node", check=False)
-    if code != 0:
-        print("⚠️  Dicas: 'pnpm install --force' ou 'pnpm store prune' e rode novamente.")
-        return False
-
-    print("[v] Node dependencies installed.")
-    return True
+def wait_for_port(port: int, host: str = "127.0.0.1", timeout_s: float = 20.0) -> bool:
+    start = time.time()
+    while time.time() - start < timeout_s:
+        if is_port_open(port, host):
+            return True
+        time.sleep(0.5)
+    return False
 
 
-def start_servers(env_name: str = "audit") -> None:
-    """Start FastAPI and Node dev server, handling Windows/non-Windows separately."""
-    # Basic port checks for friendly warnings
-    python_port = int(os.getenv("PYTHON_API_PORT", "8001"))
-    node_port = int(os.getenv("PORT", "3000"))
+def ensure_env_file() -> None:
+    env_path = ROOT_DIR / ".env"
+    if env_path.exists():
+        info(".env já existe.")
+        return
 
-    if not is_port_free(python_port):
-        print(f"[!] Port {python_port} already in use.")
-    if not is_port_free(node_port):
-        print(f"[!] Port {node_port} already in use.")
-
-    if os.name == 'nt':
-        print("Abrindo o servidor Python (FastAPI) em uma nova janela...")
-        os.system(
-            'start cmd /k "cd server\\python && conda run -n '
-            + env_name
-            + ' --live-stream python -m uvicorn api:app --host 0.0.0.0 --port '
-            + str(python_port)
-            + ' --reload --reload-dir . --reload-dir ..\\.."'
-        )
-
-        print("Abrindo o servidor Node (Vite + Express) em uma nova janela...")
-        # Importante: sem espaços após o valor no set var
-        os.system('start cmd /k "set NODE_ENV=development&& pnpm dev"')
-    else:
-        # Linux/Mac
-        print("Abrindo o servidor Python (FastAPI)...")
-        subprocess.Popen(
+    env_path.write_text(
+        "\n".join(
             [
-                "bash",
-                "-c",
-                f"conda run -n {env_name} uvicorn api:app --host 0.0.0.0 --port {python_port} --reload --reload-dir . --reload-dir ../..",
-            ],
-            cwd="server/python",
+                "DATABASE_URL=file:./sefin_audit.db",
+                f"PYTHON_API_PORT={DEFAULT_PYTHON_PORT}",
+                f"PORT={DEFAULT_NODE_PORT}",
+                "OAUTH_SERVER_URL=http://localhost:3000/mock-oauth",
+                "VITE_OAUTH_PORTAL_URL=http://localhost:3000/mock-oauth",
+                "VITE_APP_ID=sefin-audit-tool",
+                "VITE_ANALYTICS_ENDPOINT=mock-endpoint",
+                "VITE_ANALYTICS_WEBSITE_ID=mock-id",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    info(".env criado com configuração mínima.")
+
+
+def check_prerequisites(conda_env: str) -> None:
+    if not command_exists("node"):
+        fail("Node.js não encontrado no PATH.")
+    if not command_exists("pnpm"):
+        fail("pnpm não encontrado no PATH.")
+    if not command_exists("conda"):
+        fail("conda não encontrado no PATH.")
+
+    envs_cmd = ["conda", "env", "list"]
+    result = subprocess.run(envs_cmd, capture_output=True, text=True, shell=(os.name == "nt"))
+    if result.returncode != 0:
+        fail("Não foi possível listar os ambientes Conda.")
+
+    if conda_env not in result.stdout:
+        fail(
+            f"Ambiente Conda '{conda_env}' não encontrado. "
+            f"Crie-o antes de iniciar o sistema."
         )
 
-        print("Abrindo o servidor Node (Vite + Express)...")
-        subprocess.Popen(["bash", "-c", "pnpm dev"])  # PORT é resolvido do .env pelo Node
 
-    print("\n🚀 Aplicação iniciada! Acesse a interface gráfica em: http://localhost:3000")
-    print("ℹ️  Healthcheck Python: http://localhost:8001/api/python/health")
+def build_python_command(conda_env: str, python_port: int) -> str:
+    return (
+        f'cd /d "{SERVER_PYTHON_DIR}" && '
+        f"conda run -n {conda_env} --live-stream python -m uvicorn "
+        f"api:app --host 0.0.0.0 --port {python_port} --reload --reload-dir . --reload-dir ..\\.."
+    )
 
 
-def main():
-    print("Starting audit environment configuration...")
+def build_node_command() -> str:
+    return f'cd /d "{ROOT_DIR}" && set NODE_ENV=development&& pnpm dev'
 
-    # Pré-checagens de ferramentas
-    if not check_command_exists("conda"):
-        print("[-] 'conda' not found. Install Miniconda/Anaconda and run 'conda init' in your shell.")
-        sys.exit(1)
 
-    # Detecta se já estamos no ambiente 'audit'
-    current_env = os.environ.get("CONDA_DEFAULT_ENV")
+def start_in_new_terminal(title: str, command: str) -> None:
+    if os.name == "nt":
+        subprocess.Popen(
+            ["cmd", "/c", "start", title, "cmd", "/k", command],
+            cwd=str(ROOT_DIR),
+            shell=False,
+        )
+        return
 
-    # Na primeira execução, garanta que o env existe e está funcional
-    if not ensure_conda_env("audit"):
-        sys.exit(1)
+    subprocess.Popen(["bash", "-lc", command], cwd=str(ROOT_DIR))
 
-    # Se não estamos dentro do env, re-invoca dentro dele para executar o restante (instalações etc.)
-    if current_env != "audit":
-        print("\n[>] Re-executing this script inside the 'audit' Conda environment...")
-        cmd = ["conda", "run", "--no-capture-output", "-n", "audit", "python", sys.argv[0]] + sys.argv[1:]
-        sys.exit(subprocess.run(cmd, shell=(os.name == 'nt')).returncode)
-    else:
-        print("\n[v] Environment 'audit' is already active!")
 
-    # Instala bibliotecas Python
-    if not install_python_libs("audit"):
-        print("[-] Failed to install Python libraries in the environment. Check the logs above.")
-        # Prosseguir pode ser aceitável (ex.: se oracledb falhou). Não encerramos aqui.
+def start_inline(command: list[str], cwd: Path) -> subprocess.Popen[str]:
+    return subprocess.Popen(command, cwd=str(cwd), text=True)
 
-    # Node/pnpm
-    if not ensure_node_pnpm():
-        print("[-] Failed to prepare Node/PNPM environment. Check Node, npm, and pnpm.")
-        sys.exit(1)
 
-    # .env
+def launch_system(conda_env: str, python_port: int, node_port: int, open_browser: bool, inline: bool) -> None:
     ensure_env_file()
+    check_prerequisites(conda_env)
 
-    # Subir servidores
-    start_servers("audit")
+    python_running = is_port_open(python_port)
+    node_running = is_port_open(node_port)
+
+    if python_running:
+        warn(f"Backend Python já parece ativo na porta {python_port}.")
+    if node_running:
+        warn(f"Frontend/Node já parece ativo na porta {node_port}.")
+
+    if not python_running:
+        info("Iniciando backend Python...")
+        if inline:
+            start_inline(
+                [
+                    "conda",
+                    "run",
+                    "-n",
+                    conda_env,
+                    "--live-stream",
+                    "python",
+                    "-m",
+                    "uvicorn",
+                    "api:app",
+                    "--host",
+                    "0.0.0.0",
+                    "--port",
+                    str(python_port),
+                    "--reload",
+                    "--reload-dir",
+                    ".",
+                    "--reload-dir",
+                    "..\\..",
+                ],
+                SERVER_PYTHON_DIR,
+            )
+        else:
+            start_in_new_terminal("SEFIN Python API", build_python_command(conda_env, python_port))
+
+    if not node_running:
+        info("Iniciando frontend + Node...")
+        if inline:
+            start_inline(["pnpm", "dev"], ROOT_DIR)
+        else:
+            start_in_new_terminal("SEFIN Frontend", build_node_command())
+
+    if not python_running:
+        if wait_for_port(python_port, timeout_s=20):
+            info(f"Backend Python disponível em http://localhost:{python_port}")
+        else:
+            warn(f"Backend Python não respondeu na porta {python_port} dentro do tempo esperado.")
+
+    if not node_running:
+        if wait_for_port(node_port, timeout_s=30):
+            info(f"Frontend disponível em http://localhost:{node_port}")
+        else:
+            warn(f"Frontend não respondeu na porta {node_port} dentro do tempo esperado.")
+
+    print()
+    print("Sistema iniciado.")
+    print(f"- Frontend: http://localhost:{node_port}")
+    print(f"- Python API: http://localhost:{python_port}")
+    print(f"- Healthcheck Python: http://localhost:{python_port}/health")
+
+    if open_browser:
+        webbrowser.open(f"http://localhost:{node_port}")
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Inicializa o sistema completo da SEFIN Audit Tool."
+    )
+    parser.add_argument("--conda-env", default=DEFAULT_CONDA_ENV, help="Ambiente Conda do backend Python.")
+    parser.add_argument("--python-port", type=int, default=DEFAULT_PYTHON_PORT, help="Porta da API Python.")
+    parser.add_argument("--node-port", type=int, default=DEFAULT_NODE_PORT, help="Porta do frontend/Node.")
+    parser.add_argument("--no-browser", action="store_true", help="Não abrir o navegador automaticamente.")
+    parser.add_argument(
+        "--inline",
+        action="store_true",
+        help="Executa os processos no terminal atual em vez de abrir novas janelas.",
+    )
+    return parser.parse_args()
+
+
+def main() -> None:
+    args = parse_args()
+    launch_system(
+        conda_env=args.conda_env,
+        python_port=args.python_port,
+        node_port=args.node_port,
+        open_browser=not args.no_browser,
+        inline=args.inline,
+    )
 
 
 if __name__ == "__main__":
-    try:
-        main()
-    except FileNotFoundError as e:
-            print(f"[-] Command not found: {e}")
-    except subprocess.CalledProcessError as e:
-            print(f"[-] Subprocess error: {e}")
-    except Exception as e:
-            print(f"[-] Unexpected error: {e}")
+    main()
