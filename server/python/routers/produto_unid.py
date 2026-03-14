@@ -1147,11 +1147,25 @@ async def get_produtos_codigos_multidescricao(
             }
 
         df = pl.read_parquet(str(path_codigos))
+        df = df.with_columns(pl.lit("").alias("status_analise"))
 
         if not show_verified:
             status_path = _gravar_status_analise(dir_analises, cnpj_limpo)
             if status_path.exists():
                 df_status = pl.read_parquet(str(status_path))
+                df_codigo_status = (
+                    df_status.filter(pl.col("tipo_ref") == "POR_CODIGO")
+                    .select(
+                        [
+                            pl.col("ref_id").cast(pl.Utf8).alias("codigo"),
+                            pl.col("status_analise").cast(pl.Utf8),
+                        ]
+                    )
+                    .unique(subset=["codigo"], keep="last")
+                )
+                df = df.join(df_codigo_status, on="codigo", how="left", suffix="_joined").with_columns(
+                    pl.coalesce([pl.col("status_analise_joined"), pl.col("status_analise")]).alias("status_analise")
+                ).drop("status_analise_joined", strict=False)
                 verified_codes = set(
                     df_status.filter(
                         (pl.col("tipo_ref") == "POR_CODIGO") & (pl.col("status_analise") == "VERIFICADO_SEM_ACAO")
@@ -1159,6 +1173,23 @@ async def get_produtos_codigos_multidescricao(
                 )
                 if verified_codes:
                     df = df.filter(~pl.col("codigo").is_in(sorted(verified_codes)))
+        else:
+            status_path = _gravar_status_analise(dir_analises, cnpj_limpo)
+            if status_path.exists():
+                df_status = pl.read_parquet(str(status_path))
+                df_codigo_status = (
+                    df_status.filter(pl.col("tipo_ref") == "POR_CODIGO")
+                    .select(
+                        [
+                            pl.col("ref_id").cast(pl.Utf8).alias("codigo"),
+                            pl.col("status_analise").cast(pl.Utf8),
+                        ]
+                    )
+                    .unique(subset=["codigo"], keep="last")
+                )
+                df = df.join(df_codigo_status, on="codigo", how="left", suffix="_joined").with_columns(
+                    pl.coalesce([pl.col("status_analise_joined"), pl.col("status_analise")]).alias("status_analise")
+                ).drop("status_analise_joined", strict=False)
 
         summary = {
             "total_codigos": int(df.height),
@@ -1415,7 +1446,7 @@ async def get_codigo_multidescricao_resumo(cnpj: str = Query(...), codigo: str =
 
 
 @router.get("/produtos/status-analise")
-async def get_status_analise_produtos(cnpj: str = Query(...)):
+async def get_status_analise_produtos(cnpj: str = Query(...), include_data: bool = Query(True)):
     cnpj_limpo = re.sub(r"[^0-9]", "", cnpj)
     if not cnpj_limpo or not validar_cnpj(cnpj_limpo):
         raise HTTPException(status_code=400, detail="CNPJ invalido")
@@ -1433,7 +1464,7 @@ async def get_status_analise_produtos(cnpj: str = Query(...)):
         return {
             "success": True,
             "file_path": str(status_path),
-            "data": df_status.to_dicts(),
+            "data": df_status.to_dicts() if include_data else [],
             "resumo": _resumir_status_analise(dir_analises, cnpj_limpo, df_status),
         }
     except Exception as e:

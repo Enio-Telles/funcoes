@@ -372,7 +372,7 @@ export default function RevisaoParesGrupos() {
           sortKey,
           showAnalyzed,
         }),
-        getStatusAnaliseProdutos(cnpj).catch(() => ({
+        getStatusAnaliseProdutos(cnpj, { includeData: false }).catch(() => ({
           success: true,
           file_path: "",
           data: [],

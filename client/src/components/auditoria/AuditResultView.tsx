@@ -85,7 +85,7 @@ export function AuditResultView({ result, elapsed }: AuditResultViewProps) {
       return;
     }
 
-    getStatusAnaliseProdutos(cleanCnpj)
+    getStatusAnaliseProdutos(cleanCnpj, { includeData: false })
       .then((res) => {
         if (active) {
           setStatusResumo(res.resumo || null);
@@ -240,7 +240,7 @@ export function AuditResultView({ result, elapsed }: AuditResultViewProps) {
     try {
       const res = await rebuildRuntimeProdutos(cleanCnpj);
       setRuntimeStatus(res.runtime || null);
-      const statusRes = await getStatusAnaliseProdutos(cleanCnpj);
+      const statusRes = await getStatusAnaliseProdutos(cleanCnpj, { includeData: false });
       setStatusResumo(statusRes.resumo || null);
       setDownloadMsg(`Pipeline de produtos reprocessado (${res.rows} grupos).`);
       await refreshVectorStatus();

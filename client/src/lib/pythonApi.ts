@@ -976,9 +976,10 @@ export async function desfazerManualDescricoes(cnpj: string, descricoes: string[
   );
 }
 
-export async function getStatusAnaliseProdutos(cnpj: string) {
+export async function getStatusAnaliseProdutos(cnpj: string, options?: { includeData?: boolean }) {
+  const includeData = options?.includeData ?? true;
   return request<{ success: boolean; file_path: string; data: ProdutoAnaliseStatusItem[]; resumo: ProdutoAnaliseStatusResumo }>(
-    `/produtos/status-analise?cnpj=${encodeURIComponent(cnpj)}`
+    `/produtos/status-analise?cnpj=${encodeURIComponent(cnpj)}&include_data=${includeData ? "true" : "false"}`
   );
 }
 

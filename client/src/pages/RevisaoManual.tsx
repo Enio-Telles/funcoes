@@ -24,7 +24,6 @@ import {
   type AutoSepararResidualMode,
   type AutoSepararResidualResponse,
   type ProdutoAnaliseStatusResumo,
-  type ProdutoAnaliseStatusItem,
 } from "@/lib/pythonApi";
 import { analyzeDescriptions } from "@/lib/productSimilarity";
 
@@ -131,7 +130,6 @@ export default function RevisaoManual() {
 
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState<ReviewRow[]>([]);
-  const [statusRows, setStatusRows] = useState<ProdutoAnaliseStatusItem[]>([]);
   const [statusResumo, setStatusResumo] = useState<ProdutoAnaliseStatusResumo | null>(null);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(50);
@@ -222,10 +220,10 @@ export default function RevisaoManual() {
           sortDirection: sortDirection ?? "desc",
           showVerified,
         }),
-        getStatusAnaliseProdutos(cnpj).catch(() => ({
+        getStatusAnaliseProdutos(cnpj, { includeData: false }).catch(() => ({
           success: true,
           file_path: "",
-          data: [] as ProdutoAnaliseStatusItem[],
+          data: [],
           resumo: {
             pendentes: 0,
             verificados: 0,
@@ -241,7 +239,6 @@ export default function RevisaoManual() {
       setTotalRows(res.total || 0);
       setTotalPages(res.total_pages || 1);
       setTableSummary(res.summary || null);
-      setStatusRows(statusRes.success ? statusRes.data : []);
       setStatusResumo(statusRes.success ? statusRes.resumo : null);
     } catch (error) {
       console.error("Erro ao carregar codigos multidescricao:", error);
@@ -349,13 +346,8 @@ export default function RevisaoManual() {
   const totalGrupos = tableSummary?.total_grupos ?? sumMetric(rows, "qtd_grupos_descricao_afetados");
 
   const verifiedByCodigo = useMemo(
-    () =>
-      new Set(
-        statusRows
-          .filter((item) => item.tipo_ref === "POR_CODIGO" && item.status_analise === "VERIFICADO_SEM_ACAO")
-          .map((item) => normalizeValue(item.ref_id))
-      ),
-    [statusRows]
+    () => new Set(rows.filter((item) => normalizeValue(item.status_analise) === "VERIFICADO_SEM_ACAO").map((item) => normalizeValue(item.codigo))),
+    [rows]
   );
 
   const similarityBlockedCount = useMemo(() => {
