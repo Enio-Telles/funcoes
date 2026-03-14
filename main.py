@@ -35,6 +35,10 @@ def command_exists(command: str) -> bool:
     return shutil.which(command) is not None
 
 
+def resolve_executable(command: str) -> str:
+    return shutil.which(command) or command
+
+
 def is_port_open(port: int, host: str = "127.0.0.1") -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.settimeout(0.5)
@@ -122,6 +126,17 @@ def start_in_new_terminal(title: str, command: str) -> None:
 
 
 def start_inline(command: list[str], cwd: Path) -> subprocess.Popen[str]:
+    if os.name == "nt":
+        executable = resolve_executable(command[0])
+        suffix = Path(executable).suffix.lower()
+        if suffix in {".cmd", ".bat"}:
+            return subprocess.Popen(
+                ["cmd", "/c", executable, *command[1:]],
+                cwd=str(cwd),
+                text=True,
+            )
+        return subprocess.Popen([executable, *command[1:]], cwd=str(cwd), text=True)
+
     return subprocess.Popen(command, cwd=str(cwd), text=True)
 
 
