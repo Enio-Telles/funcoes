@@ -10,9 +10,9 @@ Este documento detalha cada análise/cruzamento implementado no SEFIN Audit Tool
 📦 PROJETO ROOT
 └── 📁 cruzamentos/              ← AQUI FICAM TODAS AS ANÁLISES
     ├── 📁 funcoes_auxiliares/   # Funções compartilhadas
-    │   ├── aux_calc_MVA_ajustado.py      # Cálculo de MVA
+    │   ├── aux_calc_mva_ajustado.py      # Cálculo de MVA
     │   ├── aux_classif_merc.py           # Classificação de mercadoria
-    │   ├── aux_ST.py                     # Cálculos ST (Substituição Tributária)
+    │   ├── aux_st.py                     # Cálculos ST (Substituição Tributária)
     │   ├── conectar_oracle.py            # Conexão Oracle
     │   ├── encontrar_arquivo_cnpj.py     # Busca arquivos por CNPJ
     │   ├── exportar_excel.py             # Exportação Excel
@@ -421,7 +421,7 @@ Todos estes utilities estão em `funcoes_auxiliares/` e podem ser importados:
 from funcoes_auxiliares.validar_cnpj import validar_cnpj
 from funcoes_auxiliares.ler_sql import ler_sql
 from funcoes_auxiliares.normalizar_parquet import normalizar_colunas
-from funcoes_auxiliares.aux_ST import calcular_st_ajustado
+from funcoes_auxiliares.aux_st import calcular_st_ajustado
 from funcoes_auxiliares.encontrar_arquivo_cnpj import encontrar_arquivo
 ```
 

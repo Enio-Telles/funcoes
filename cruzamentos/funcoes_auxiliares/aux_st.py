@@ -11,7 +11,7 @@ def aux_calc_VBC_ST(
     col_vipi: str,
     col_mva_flag: str,       # it_in_mva_ajustado
     col_mva_original: str,   # it_pc_mva (em %)
-    col_mva_ajustado: str,   # resultado da aux_calc_MVA_ajustado (decimal)
+    col_mva_ajustado: str,   # resultado da aux_calc_mva_ajustado (decimal)
     nome_coluna_saida: str = "vbc_st_calc"
 ) -> pl.DataFrame:
     """

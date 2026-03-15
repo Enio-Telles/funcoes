@@ -2,7 +2,7 @@ import polars as pl
 from rich import print as rprint
 
 
-def aux_calc_MVA_ajustado(
+def aux_calc_mva_ajustado(
     df: pl.DataFrame,
     col_mva_ajustado_flag: str,
     col_mva_orig: str,
