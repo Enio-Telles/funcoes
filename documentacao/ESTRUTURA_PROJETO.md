@@ -164,9 +164,9 @@ sefin-audit-tool/
 │   │
 │   ├── 📁 funcoes_auxiliares/        # Funções reutilizáveis
 │   │   ├── __init__.py
-│   │   ├── aux_calc_MVA_ajustado.py  # Cálculo MVA
+│   │   ├── aux_calc_mva_ajustado.py  # Cálculo MVA
 │   │   ├── aux_classif_merc.py       # Classificação mercadoria
-│   │   ├── aux_ST.py                 # Cálculos Substituição Tributária
+│   │   ├── aux_st.py                 # Cálculos Substituição Tributária
 │   │   ├── conectar_oracle.py        # Conexão Oracle
 │   │   ├── encontrar_arquivo_cnpj.py # Busca arquivos
 │   │   ├── exportar_excel.py         # Export Excel
