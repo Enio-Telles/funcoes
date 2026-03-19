@@ -619,7 +619,7 @@ export default function Tabelas() {
                   >
                     <FolderOpen className="h-3 w-3 mr-1.5 opacity-50" />
                     <span className="truncate max-w-[120px]">{folder.name}</span>
-                    <button className="ml-1.5 opacity-0 group-hover:opacity-100 p-0.5" onClick={(e) => removeRecentFolder(folder.path, e)}>
+                    <button className="ml-1.5 opacity-0 group-hover:opacity-100 p-0.5 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-sm" onClick={(e) => removeRecentFolder(folder.path, e)} aria-label="Remover pasta recente">
                       <X className="h-2.5 w-2.5" />
                     </button>
                   </Badge>
@@ -643,7 +643,7 @@ export default function Tabelas() {
                       <div className="flex items-center gap-3 shrink-0 text-xs text-muted-foreground">
                         <span>{file.size_human}</span>
                         <span>{file.rows} linhas</span>
-                        <button className="opacity-0 group-hover:opacity-100 p-1" onClick={(e) => { e.stopPropagation(); openParquetInNewTab(file.path); }}>
+                        <button className="opacity-0 group-hover:opacity-100 p-1 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-sm" onClick={(e) => { e.stopPropagation(); openParquetInNewTab(file.path); }} aria-label="Abrir tabela em nova guia">
                           <ExternalLink className="h-3.5 w-3.5" />
                         </button>
                       </div>
@@ -738,7 +738,7 @@ export default function Tabelas() {
                             </button>
                             <DropdownMenu onOpenChange={(open) => { if (open) handleFetchUniqueValues(col); }}>
                               <DropdownMenuTrigger asChild>
-                                <button className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-background/50"><MoreVertical className="h-3 w-3" /></button>
+                                <button className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-background/50 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="Opções da coluna"><MoreVertical className="h-3 w-3" /></button>
                               </DropdownMenuTrigger>
                               <DropdownMenuContent align="start" className="w-56">
                                 <DropdownMenuItem onClick={() => openColorDialog("column", col)}><Paintbrush className="h-3.5 w-3.5 mr-2" /> Cores da Coluna</DropdownMenuItem>
@@ -855,7 +855,7 @@ export default function Tabelas() {
                           <td className="px-1 py-1.5 border-b border-r shrink-0 w-10 sticky right-0 bg-background/95 z-10">
                             <DropdownMenu>
                               <DropdownMenuTrigger asChild>
-                                <button className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-muted transition-opacity"><MoreVertical className="h-3 w-3" /></button>
+                                <button className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-muted transition-opacity focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="Opções da linha"><MoreVertical className="h-3 w-3" /></button>
                               </DropdownMenuTrigger>
                               <DropdownMenuContent align="end" className="w-56">
                                 <DropdownMenuItem onClick={() => openColorDialog("row", rowIdx)}><Paintbrush className="h-3 w-3 mr-2" /> Cores da Linha</DropdownMenuItem>
