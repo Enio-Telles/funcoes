@@ -37,6 +37,16 @@ class ServicoAgregacao:
         self.arquivo_log.parent.mkdir(parents=True, exist_ok=True)
 
     @staticmethod
+    def _escolher_moda(valores: list[Any]) -> str | None:
+        limpos = [str(v).strip() for v in valores if v not in (None, "", []) and str(v).strip()]
+        if not limpos:
+            return None
+        counts = Counter(limpos)
+        max_count = max(counts.values())
+        candidatos = [valor for valor, count in counts.items() if count == max_count]
+        return sorted(candidatos, key=natural_sort_key)[0]
+
+    @staticmethod
     def caminho_tabela_editavel(cnpj: str) -> Path:
         """Caminho para a tabela final editável do CNPJ."""
         return CNPJ_ROOT / cnpj / "analises" / "produtos" / f"tabela_produtos_editavel_{cnpj}.parquet"
@@ -267,8 +277,86 @@ class ServicoAgregacao:
         with self.arquivo_log.open("a", encoding="utf-8") as f:
             f.write(json.dumps(payload, ensure_ascii=False) + "\n")
 
-    def ler_linhas_log(self, limite: int = 200) -> list[str]:
+    def recalcular_todos_padroes(self, cnpj: str) -> bool:
+        """
+        Recalcula campos padrão (NCM, CEST, GTIN, UNID, SEFIN) de TODA a tabela editável
+        baseado na moda dos itens que compõem cada grupo.
+        """
+        destino = self.caminho_tabela_editavel(cnpj)
+        arq_itens = CNPJ_ROOT / cnpj / "analises" / "produtos" / f"tab_itens_caract_normalizada_{cnpj}.parquet"
+        
+        if not destino.exists() or not arq_itens.exists():
+            return False
+
+        df_edit = pl.read_parquet(destino)
+        df_itens = pl.read_parquet(arq_itens)
+        
+        # Mapeamento: Chave_item -> Características
+        campos_recalc = ["ncm", "cest", "gtin", "tipo_item", "unidade", "co_sefin_inferido"]
+        item_map = df_itens.select(["chave_item_individualizado"] + [c for c in campos_recalc if c in df_itens.columns])
+
+        # Vamos iterar sobre cada linha do editável (ou usar explode/join que é mais eficiente no Polars)
+        # 1. Explode a lista de chaves
+        df_exploded = df_edit.select(["chave_produto", "lista_chave_item_individualizado"]).explode("lista_chave_item_individualizado")
+        
+        # 2. Join com os itens originais
+        df_join = df_exploded.join(item_map, left_on="lista_chave_item_individualizado", right_on="chave_item_individualizado", how="left")
+        
+        # 3. Agrupa por chave_produto e calcula moda
+        def _get_moda(s: pl.Series) -> str | None:
+            return self._escolher_moda(s.to_list())
+
+        agg_exprs = []
+        mapping_padrao = {
+            "ncm": "ncm_padrao",
+            "cest": "cest_padrao",
+            "gtin": "gtin_padrao",
+            "tipo_item": "tipo_item_padrao",
+            "unidade": "unid_padrao",
+            "co_sefin_inferido": "co_sefin_agr"
+        }
+
+        for orig, dest in mapping_padrao.items():
+            if orig in df_join.columns:
+                agg_exprs.append(
+                    pl.col(orig).map_elements(_get_moda, return_dtype=pl.String).alias(dest)
+                )
+
+        df_recalc = df_join.group_by("chave_produto").agg(agg_exprs)
+        
+        # 4. Atualiza a tabela editável
+        # Removemos os campos antigos e joinamos os novos
+        df_sem_padroes = df_edit.drop([c for c in mapping_padrao.values() if c in df_edit.columns])
+        df_novo = df_sem_padroes.join(df_recalc, on="chave_produto", how="left")
+        
+        df_novo.write_parquet(destino, compression="snappy")
+        return True
+
+    def ler_linhas_log(self, cnpj: str | None = None, limite: int = 200) -> list[dict[str, Any]]:
+        """
+        Lê as últimas linhas do log, opcionalmente filtrando por CNPJ.
+        Retorna uma lista de dicionários com os resultados das agregações.
+        """
         if not self.arquivo_log.exists():
             return []
-        linhas = self.arquivo_log.read_text(encoding="utf-8").splitlines()
-        return linhas[-limite:]
+            
+        resultados = []
+        try:
+            with self.arquivo_log.open("r", encoding="utf-8") as f:
+                for line in f:
+                    if not line.strip():
+                        continue
+                    try:
+                        data = json.loads(line)
+                        if cnpj is None or data.get("cnpj") == cnpj:
+                            res = data.get("resultado")
+                            if res:
+                                # Adiciona metadados se necessário
+                                res["_timestamp"] = data.get("timestamp")
+                                resultados.append(res)
+                    except json.JSONDecodeError:
+                        continue
+        except Exception:
+            return []
+            
+        return resultados[-limite:]

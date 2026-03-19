@@ -335,8 +335,11 @@ class MainWindow(QMainWindow):
         toolbar = QHBoxLayout()
         self.btn_open_editable_table = QPushButton("Abrir tabela editável _2")
         self.btn_execute_aggregation = QPushButton("Agregar Descrições (da seleção)")
+        self.btn_recalc_defaults = QPushButton("♻️  Recalcular Padrões (Geral)")
+        
         toolbar.addWidget(self.btn_open_editable_table)
         toolbar.addWidget(self.btn_execute_aggregation)
+        toolbar.addWidget(self.btn_recalc_defaults)
         toolbar.addStretch()
         top_layout.addLayout(toolbar)
 
@@ -547,6 +550,7 @@ class MainWindow(QMainWindow):
 
         self.btn_open_editable_table.clicked.connect(self.open_editable_aggregation_table)
         self.btn_execute_aggregation.clicked.connect(self.execute_aggregation)
+        self.btn_recalc_defaults.clicked.connect(self.recalcular_padroes_agregacao)
 
         for qf in [self.qf_norm, self.qf_desc, self.qf_ncm, self.qf_cest,
                    self.aqf_norm, self.aqf_desc, self.aqf_ncm, self.aqf_cest]:
@@ -655,6 +659,7 @@ class MainWindow(QMainWindow):
         self.registry_service.upsert(cnpj, ran_now=False)
         self.refresh_file_tree(cnpj)
         self.atualizar_aba_conversao()
+        self.recarregar_historico_agregacao(cnpj)
 
     def refresh_file_tree(self, cnpj: str) -> None:
         self.file_tree.clear()
@@ -939,24 +944,17 @@ class MainWindow(QMainWindow):
             return
 
         try:
-            result = self.servico_agregacao.agregar_linhas(
+            self.servico_agregacao.agregar_linhas(
                 cnpj=self.state.current_cnpj,
                 linhas_selecionadas=combined,
             )
+            # Update the tables to reflect the changes
+            self.atualizar_tabelas_agregacao()
+            self.recarregar_historico_agregacao(self.state.current_cnpj)
             
-            # Update history: remove any rows from combined that were in history
-            keys_to_remove = set()
-            for r in combined:
-                keys_to_remove.add((str(r.get("descricao") or ""), str(r.get("chave_produto") or "")))
-            
-            self.aggregation_results = [
-                r for r in self.aggregation_results 
-                if (str(r.get("descricao") or ""), str(r.get("chave_produto") or "")) not in keys_to_remove
-            ]
-            self.aggregation_results.insert(0, result.linha_agregada)
-            
-            self.results_table_model.set_dataframe(pl.DataFrame(self.aggregation_results))
-            self.results_table_view.resizeColumnsToContents()
+            QMessageBox.information(self, "Sucesso", "Agregação realizada com sucesso e salva permanentemente.")
+        except Exception as e:
+            self.show_error("Erro na agregação", f"Ocorreu um erro ao agregar: {e}")
             
             # Clear checks and reload top table
             self.aggregation_table_model.clear_checked()
@@ -1118,6 +1116,44 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Erro", f"Erro ao importar: {e}")
 
+    def recalcular_padroes_agregacao(self) -> None:
+        """Invoca o serviço para recalcular todos os padrões do CNPJ atual."""
+        cnpj = self.state.current_cnpj
+        if not cnpj: return
+        
+        ret = QMessageBox.question(self, "Recalcular Padrões", 
+                                   "Isso irá atualizar NCM, CEST, GTIN, UNID e SEFIN de TODOS os grupos baseando-se na moda dos itens originais.\nProsseguir?",
+                                   QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        if ret == QMessageBox.StandardButton.No: return
+        
+        try:
+            ok = self.aggregation_service.recalcular_todos_padroes(cnpj)
+            if ok:
+                self.atualizar_tabelas_agregacao()
+                QMessageBox.information(self, "Sucesso", "Valores padrão recalculados com sucesso para toda a tabela.")
+            else:
+                QMessageBox.warning(self, "Aviso", "Não foi possível recalcular. Verifique se as tabelas existem.")
+        except Exception as e:
+            QMessageBox.critical(self, "Erro", f"Erro ao recalcular: {e}")
+
+    def recarregar_historico_agregacao(self, cnpj: str) -> None:
+        """Lê o log persistente e preenche o painel de resultados da sessão."""
+        historico = self.aggregation_service.ler_linhas_log(cnpj=cnpj)
+        # O model espera uma lista de dicts (linhas da tabela)
+        self.results_table_model.set_dataframe(pl.DataFrame(historico))
+        self.results_table_view.resizeColumnsToContents()
+
+    def atualizar_tabelas_agregacao(self) -> None:
+        """Atualiza os modelos das tabelas de agregação."""
+        cnpj = self.state.current_cnpj
+        if not cnpj: return
+        
+        path = self.aggregation_service.caminho_tabela_editavel(cnpj)
+        if path.exists():
+            df = pl.read_parquet(path)
+            self.aggregation_table_model.set_dataframe(df)
+            self.aggregation_table_view.resizeColumnsToContents()
+            
     # ==================================================================
     # Consulta SQL — métodos de suporte
     # ==================================================================
