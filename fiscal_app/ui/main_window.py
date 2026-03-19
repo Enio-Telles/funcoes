@@ -333,13 +333,13 @@ class MainWindow(QMainWindow):
         top_layout = QVBoxLayout(top_box)
         
         toolbar = QHBoxLayout()
-        self.btn_open_editable_table = QPushButton("Abrir tabela editável _2")
-        self.btn_execute_aggregation = QPushButton("Agregar Descrições (da seleção)")
         self.btn_recalc_defaults = QPushButton("♻️  Recalcular Padrões (Geral)")
+        self.btn_recalc_totals = QPushButton("💰  Recalcular Totais")
         
         toolbar.addWidget(self.btn_open_editable_table)
         toolbar.addWidget(self.btn_execute_aggregation)
         toolbar.addWidget(self.btn_recalc_defaults)
+        toolbar.addWidget(self.btn_recalc_totals)
         toolbar.addStretch()
         top_layout.addLayout(toolbar)
 
@@ -551,6 +551,7 @@ class MainWindow(QMainWindow):
         self.btn_open_editable_table.clicked.connect(self.open_editable_aggregation_table)
         self.btn_execute_aggregation.clicked.connect(self.execute_aggregation)
         self.btn_recalc_defaults.clicked.connect(self.recalcular_padroes_agregacao)
+        self.btn_recalc_totals.clicked.connect(self.recalcular_totais_agregacao)
 
         for qf in [self.qf_norm, self.qf_desc, self.qf_ncm, self.qf_cest,
                    self.aqf_norm, self.aqf_desc, self.aqf_ncm, self.aqf_cest]:
@@ -1135,6 +1136,29 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, "Aviso", "Não foi possível recalcular. Verifique se as tabelas existem.")
         except Exception as e:
             QMessageBox.critical(self, "Erro", f"Erro ao recalcular: {e}")
+
+    def recalcular_totais_agregacao(self) -> None:
+        """Invoca o serviço para recalcular totais de entrada/saída do CNPJ atual."""
+        cnpj = self.state.current_cnpj
+        if not cnpj: return
+        
+        ret = QMessageBox.question(self, "Recalcular Totais", 
+                                   "Isso irá calcular os totais de Entrada (C170) e Saída (NFe) para todos os produtos (apenas operações mercantis).\nProsseguir?",
+                                   QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        if ret == QMessageBox.StandardButton.No: return
+        
+        self.status.showMessage("Calculando totais de valores...")
+        try:
+            ok = self.aggregation_service.recalcular_valores_totais(cnpj)
+            if ok:
+                self.atualizar_tabelas_agregacao()
+                QMessageBox.information(self, "Sucesso", "Totais de valores recalculados com sucesso.")
+            else:
+                QMessageBox.warning(self, "Aviso", "Não foi possível recalcular os totais.")
+        except Exception as e:
+            QMessageBox.critical(self, "Erro", f"Erro ao recalcular totais: {e}")
+        finally:
+            self.status.showMessage("Pronto.")
 
     def recarregar_historico_agregacao(self, cnpj: str) -> None:
         """Lê o log persistente e preenche o painel de resultados da sessão."""

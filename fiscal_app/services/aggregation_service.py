@@ -15,7 +15,7 @@ from typing import Any
 
 import polars as pl
 
-from fiscal_app.config import AGGREGATION_LOG_FILE, CNPJ_ROOT
+from fiscal_app.config import AGGREGATION_LOG_FILE, CNPJ_ROOT, CFOP_BI_PATH
 from fiscal_app.utils.text import natural_sort_key, normalize_text
 
 CODE_ENTRY_RE = re.compile(r"\[(.*?);\s*(\d+)\]")
@@ -330,6 +330,90 @@ class ServicoAgregacao:
         df_novo = df_sem_padroes.join(df_recalc, on="chave_produto", how="left")
         
         df_novo.write_parquet(destino, compression="snappy")
+        return True
+
+    def recalcular_valores_totais(self, cnpj: str) -> bool:
+        """
+        Calcula tot_v_entradas e tot_v_saidas para cada chave_produto + unidade.
+        Filtra CFOP por sisaudit_estoque == 'X'.
+        """
+        from aux_leitura_notas import ler_nfe_nfce, ler_c170
+        
+        destino = self.caminho_tabela_editavel(cnpj)
+        if not destino.exists():
+            return False
+
+        # 1. Carrega CFOPs válidos (Mercantil)
+        df_cfop = pl.read_parquet(CFOP_BI_PATH).filter(pl.col("sisaudit_estoque") == "X")
+        cfops_validos = df_cfop.select("co_cfop").to_series().to_list()
+
+        # 2. Carrega Transações
+        df_c170 = ler_c170(cnpj).filter(pl.col("co_cfop").is_in(cfops_validos))
+        df_nfe = ler_nfe_nfce(cnpj).filter(pl.col("co_cfop").is_in(cfops_validos))
+
+        # 3. Calcula Valores
+        # Entradas (C170): IND_OPER == 0, VALOR_ITEM
+        df_ent = (
+            df_c170.filter(pl.col("ind_oper") == 0)
+            .group_by(["codigo", "descricao", "unid_med"])
+            .agg(pl.col("valor_item").sum().alias("v_ent"))
+        )
+
+        # Saídas (NFe/NFCe): V_item = PROD_VPROD + PROD_VFRETE + PROD_VSEG + PROD_VOUTRO - PROD_VDESC
+        # Note: aux_leitura_notas may have different column names, we use standard logic
+        df_sai_raw = df_nfe.filter(pl.col("ind_oper") == 1)
+        
+        # Garante colunas para a fórmula
+        for c in ["prod_vprod", "prod_vfrete", "prod_vseg", "prod_voutro", "prod_vdesc"]:
+            if c not in df_sai_raw.columns:
+                df_sai_raw = df_sai_raw.with_columns(pl.lit(0.0).alias(c))
+
+        df_sai_calc = df_sai_raw.with_columns(
+            (pl.col("prod_vprod") + pl.col("prod_vfrete") + pl.col("prod_vseg") + 
+             pl.col("prod_voutro") - pl.col("prod_vdesc")).alias("_v_calc")
+        )
+
+        df_sai = (
+            df_sai_calc.group_by(["codigo", "descricao", "unid_med"])
+            .agg(pl.col("_v_calc").sum().alias("v_sai"))
+        )
+
+        # 4. Join com Item -> chave_item_individualizado
+        arq_itens = CNPJ_ROOT / cnpj / "analises" / "produtos" / f"tab_itens_caract_normalizada_{cnpj}.parquet"
+        df_itens = pl.read_parquet(arq_itens).select(["codigo", "descricao", "chave_item_individualizado"])
+        
+        df_res_ent = df_ent.join(df_itens, on=["codigo", "descricao"], how="left")
+        df_res_sai = df_sai.join(df_itens, on=["codigo", "descricao"], how="left")
+
+        # 5. Join com Editable -> chave_produto
+        df_edit = pl.read_parquet(destino)
+        df_map = df_edit.select(["chave_produto", "lista_chave_item_individualizado"]).explode("lista_chave_item_individualizado")
+
+        df_v_ent = df_res_ent.join(df_map, left_on="chave_item_individualizado", right_on="lista_chave_item_individualizado", how="inner")
+        df_v_sai = df_res_sai.join(df_map, left_on="chave_item_individualizado", right_on="lista_chave_item_individualizado", how="inner")
+
+        # 6. Agrupa por chave_produto + unidade (unid_med) e formata
+        def _format_list(df, col_val, col_name):
+            return (
+                df.group_by(["chave_produto", "unid_med"])
+                .agg(pl.col(col_val).sum())
+                .sort(["chave_produto", "unid_med"])
+                .with_columns(
+                    ("[" + pl.col("unid_med") + "; " + pl.col(col_val).cast(pl.Int64).cast(pl.String) + "]").alias("_str")
+                )
+                .group_by("chave_produto")
+                .agg(pl.col("_str").unique().sort().str.join("; ").alias(col_name))
+            )
+
+        df_final_ent = _format_list(df_v_ent, "v_ent", "tot_v_entradas")
+        df_final_sai = _format_list(df_v_sai, "v_sai", "tot_v_saidas")
+
+        # 7. Update editable table
+        df_edit = df_edit.drop([c for c in ["tot_v_entradas", "tot_v_saidas"] if c in df_edit.columns])
+        df_edit = df_edit.join(df_final_ent, on="chave_produto", how="left")
+        df_edit = df_edit.join(df_final_sai, on="chave_produto", how="left")
+        
+        df_edit.write_parquet(destino, compression="snappy")
         return True
 
     def ler_linhas_log(self, cnpj: str | None = None, limite: int = 200) -> list[dict[str, Any]]:

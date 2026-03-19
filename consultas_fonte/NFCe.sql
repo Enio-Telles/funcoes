@@ -1,27 +1,175 @@
-/*
- * CONSULTA ESPELHO: bi.fato_nfe_detalhe
- * Comentarios baseados no MOC 7.0 Anexo I - Leiaute e Regras de Validacao
- */
-
 WITH parametros AS (
-    SELECT 
-        :CNPJ AS cnpj_filtro
-    FROM DUAL
+    SELECT
+        :cnpj AS cnpj_filtro
+    FROM
+        dual
 )
 SELECT
-    CASE 
-        -- CNPJ consultado é o EMITENTE
-        WHEN d.co_emitente = p.cnpj_filtro AND d.co_tp_nf = 1 THEN '1 - SAIDA'
-        WHEN d.co_emitente = p.cnpj_filtro AND d.co_tp_nf = 0 THEN '0 - ENTRADA'
-
--- CNPJ consultado é o DESTINATARIO
-WHEN d.co_destinatario = p.cnpj_filtro
-AND d.co_tp_nf = 1 THEN '0 - ENTRADA' WHEN d.co_destinatario = p.cnpj_filtro
-AND d.co_tp_nf = 0 THEN '1 - SAIDA' ELSE 'INDEFINIDO' END AS tipo_operacao,
-d.* -- Traz os demais campos da nota em seguida
-FROM bi.fato_nfce_detalhe d, parametros p
+    CASE
+        WHEN d.co_emitente = p.cnpj_filtro
+             AND d.co_tp_nf = 1 THEN
+            '1 - SAIDA'
+        WHEN d.co_emitente = p.cnpj_filtro
+             AND d.co_tp_nf = 0 THEN
+            '0 - ENTRADA'
+        WHEN d.co_destinatario = p.cnpj_filtro
+             AND d.co_tp_nf = 1 THEN
+            '0 - ENTRADA'
+        WHEN d.co_destinatario = p.cnpj_filtro
+             AND d.co_tp_nf = 0 THEN
+            '1 - SAIDA'
+        ELSE
+            'INDEFINIDO'
+    END AS tipo_operacao,
+    d.co_destinatario,
+    d.co_emitente,
+    p.cnpj_filtro,
+    d.nsu,
+    d.chave_acesso,
+    d.prod_nitem,
+    d.ide_co_cuf,
+    d.ide_co_indpag,
+    d.ide_co_mod,
+    d.ide_serie,
+    d.nnf,
+    d.dhemi,
+    d.co_tp_nf,
+    d.co_iddest,
+    d.co_cmun_fg,
+    d.co_tpemis,
+    d.co_finnfe,
+    d.co_indpres,
+    d.co_indfinal,
+    d.xnome_emit,
+    d.xfant_emit,
+    d.co_uf_emit,
+    d.co_cad_icms_emit,
+    d.co_crt,
+    d.xlgr_emit,
+    d.nro_emit,
+    d.xcpl_emit,
+    d.xbairro_emit,
+    d.co_cmun_emit,
+    d.xmun_emit,
+    d.cep_emit,
+    d.cpais_emit,
+    d.xpais_emit,
+    d.fone_emit,
+    d.xnome_dest,
+    d.co_uf_dest,
+    d.co_indiedest,
+    d.xlgr_dest,
+    d.nro_dest,
+    d.xcpl_dest,
+    d.xbairro_dest,
+    d.co_cmun_dest,
+    d.xmun_dest,
+    d.cep_dest,
+    d.cpais_dest,
+    d.xpais_dest,
+    d.fone_dest,
+    d.prod_cprod,
+    d.prod_cean,
+    d.prod_xprod,
+    d.prod_ncm,
+    d.co_cfop,
+    d.prod_ucom,
+    d.prod_qcom,
+    d.prod_vuncom,
+    d.prod_vprod,
+    d.prod_ceantrib,
+    d.prod_utrib,
+    d.prod_qtrib,
+    d.prod_vuntrib,
+    d.prod_vfrete,
+    d.prod_vseg,
+    d.prod_vdesc,
+    d.prod_voutro,
+    d.prod_indtot,
+    d.icms_csosn,
+    d.icms_cst,
+    d.icms_modbc,
+    d.icms_modbcst,
+    d.icms_motdesicms,
+    d.icms_orig,
+    d.icms_pbcop,
+    d.icms_pcredsn,
+    d.icms_pdif,
+    d.icms_picms,
+    d.icms_picmsst,
+    d.icms_pmvast,
+    d.icms_predbc,
+    d.icms_predbcst,
+    d.icms_ufst,
+    d.icms_vbc,
+    d.icms_vbcst,
+    d.icms_vbcstdest,
+    d.icms_vbcstret,
+    d.icms_vcredicmssn,
+    d.icms_vicms,
+    d.icms_vicmsdeson,
+    d.icms_vicmsdif,
+    d.icms_vicmsop,
+    d.icms_vicmsst,
+    d.icms_vicmsstdest,
+    d.icms_vicmsstret,
+    d.icms_vbcfcp,
+    d.icms_pfcp,
+    d.icms_vfcp,
+    d.icms_vbcfcpst,
+    d.icms_pfcpst,
+    d.icms_vfcpst,
+    d.icms_vbcufdest,
+    d.icms_vbcfcpufdest,
+    d.icms_pfcpufdest,
+    d.icms_picmsufdest,
+    d.icms_picmsinter,
+    d.icms_picmsinterpart,
+    d.icms_vfcpufdest,
+    d.icms_vicmsufdest,
+    d.icms_vicmsufremet,
+    d.icms_pst,
+    d.icms_vbcfcpstret,
+    d.icms_pfcpstret,
+    d.icms_vfcpstret,
+    d.icms_predbcefet,
+    d.icms_vbcefet,
+    d.icms_picmsefet,
+    d.icms_vicmsefet,
+    d.tot_vbc,
+    d.tot_vicms,
+    d.tot_vicmsdeson,
+    d.tot_vbcst,
+    d.tot_vst,
+    d.tot_vprod,
+    d.tot_vfrete,
+    d.tot_vseg,
+    d.tot_vdesc,
+    d.tot_vii,
+    d.tot_vipi,
+    d.tot_vpis,
+    d.tot_vcofins,
+    d.tot_voutro,
+    d.tot_vnf,
+    d.tot_vtottrib,
+    d.tot_vfcpufdest,
+    d.tot_vicmsufdest,
+    d.tot_vicmsufremet,
+    d.tot_vfcp,
+    d.tot_vfcpst,
+    d.tot_vfcpstret,
+    d.tot_vipidevol,
+    d.infprot_cstat,
+    d.icms_csosn_a,
+    d.icms_cst_a,
+    d.dt_gravacao,
+    d.seq_nitem,
+    d.dhemi_hora,
+    d.status_carga_campo_fcp,
+    d.prod_cest
+FROM
+    bi.fato_nfce_detalhe    d,
+    parametros              p
 WHERE
-    d.co_destinatario = p.cnpj_filtro
-    OR d.co_emitente = p.cnpj_filtro
-    --AND INFPROT_CSTAT in (100,150) NFCe com código diferentes de 100 ou 150 não devem ser registradas
-    -- AND PROD_CPROD LIKE '%226052'
+    ( d.co_destinatario = p.cnpj_filtro )
+    OR ( d.co_emitente = p.cnpj_filtro )
