@@ -110,10 +110,10 @@ def ler_c170(path: Path | None, cfop_df: pl.DataFrame | None = None, ano_padrao:
         "cest": "cest",
         "cod_barra": "gtin",
         "unid": "unidade",
-        "vl_item": "vl_item",
+        "vl_item": "valor_entrada",
         "co_cfop": "co_cfop",
         "ind_oper": "ind_oper",
-        "qtd": "qtd"
+        "qtd": "quantidade_entrada"
     }
 
     selecionar = [c for c in col_map.keys() if c in schema]

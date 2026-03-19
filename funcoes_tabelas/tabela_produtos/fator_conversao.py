@@ -408,7 +408,7 @@ def calcular_fator_conversao(cnpj: str, pasta_cnpj: Path | None = None) -> bool:
     )
     
     # 5 e 6. Agrupar por produto e definir unidade padrão
-    df_aggr, df_fator = _agrupar_por_produto(df_vols)
+    df_aggr, df_fator = _agrupar_por_produto_ano(df_vols)
 
     # 7. Join para calcular fator em relação à unid_padrao
     df_final = _calcular_fator_final(df_fator, df_aggr)
