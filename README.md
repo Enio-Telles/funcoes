@@ -124,7 +124,7 @@ Sistema para extração, análise e agregação de dados fiscais (Oracle -> Parq
 
 ### Executando a Interface Gráfica
 ```bash
-python src/interface_grafica/main.py
+python -m src.interface_grafica.main
 ```
 
 ### Executando o Pipeline (Linha de Comando)

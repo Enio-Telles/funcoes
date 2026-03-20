@@ -1,8 +1,7 @@
-from __future__ import annotations
-
+import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Any
 
 import polars as pl
 from PySide6.QtCore import QDate, QThread, Qt, Signal, QUrl
@@ -41,6 +40,7 @@ from src.config import (
     CNPJ_ROOT,
     CONSULTAS_ROOT,
     DEFAULT_PAGE_SIZE,
+    FUNCOES_ROOT,
 )
 from src.interface_grafica.modelos.table_model import PolarsTableModel
 from src.servicos.aggregation_service import ServicoAgregacao
@@ -51,7 +51,7 @@ from src.servicos.pipeline_service import PipelineService
 from src.servicos.query_worker import QueryWorker
 from src.servicos.registry_service import RegistryService
 from src.servicos.state_service import StateService
-from src.servicos.sql_service import SqlService, ParamInfo, WIDGET_DATE
+from src.servicos.sql_service import SQLService, ParamInfo, WIDGET_DATE
 from src.interface_grafica.dialogs import (
     ColumnSelectorDialog,
     DialogoSelecaoConsultas,
@@ -99,6 +99,43 @@ class PipelineWorker(QThread):
             message = "\n".join(result.erros) if result.erros else "Falha no pipeline."
             self.failed.emit(message or "Falha sem detalhes.")
 
+class AggregationWorker(QThread):
+    finished = Signal(object)
+    failed = Signal(str)
+
+    def __init__(self, service: ServicoAgregacao, cnpj: str, selects: list, tables: list):
+        super().__init__()
+        self.service = service
+        self.cnpj = cnpj
+        self.selects = selects
+        self.tables = tables
+
+    def run(self):
+        try:
+            # Chama o serviço de agregação (operação pesada de CPU/IO)
+            result = self.service.agregar_selecionados(self.cnpj, self.selects, self.tables)
+            self.finished.emit(result)
+        except Exception as e:
+            self.failed.emit(str(e))
+
+class ExportWorker(QThread):
+    finished = Signal(Path)
+    failed = Signal(str)
+
+    def __init__(self, method: Callable, *args, **kwargs):
+        super().__init__()
+        self.method = method
+        self.args = args
+        self.kwargs = kwargs
+
+    def run(self):
+        try:
+            # Chama qualquer método de exportação (Excel, Docx)
+            result_path = self.method(*self.args, **self.kwargs)
+            self.finished.emit(result_path)
+        except Exception as e:
+            self.failed.emit(str(e))
+
 
 @dataclass
 class ViewState:
@@ -125,7 +162,18 @@ class MainWindow(QMainWindow):
         self.servico_pipeline_funcoes = ServicoPipelineCompleto()
         self.export_service = ExportService()
         self.servico_agregacao = ServicoAgregacao()
-        self.sql_service = SqlService()
+        self.sql_service = SQLService(sql_dir=CONSULTAS_ROOT) # Usando CONSULTAS_ROOT (alias para SQL_DIR)
+        
+        # Configurar Logging
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+            handlers=[
+                logging.FileHandler(FUNCOES_ROOT / "logs" / "app.log", encoding="utf-8"),
+                logging.StreamHandler()
+            ]
+        )
+        self.logger = logging.getLogger("MainWindow")
 
         self.state = ViewState(filters=[])
         self.current_page_df_all = pl.DataFrame()
@@ -980,9 +1028,28 @@ class MainWindow(QMainWindow):
             target = self._save_dialog("Salvar Excel", "Excel (*.xlsx)")
             if not target:
                 return
-            self.export_service.export_excel(target, df, sheet_name=self.state.current_file.stem if self.state.current_file else "Dados")
-            self.show_info("Exportação concluída", f"Arquivo gerado em:\n{target}")
+                
+            self.status.showMessage("Exportando para Excel...")
+            self.logger.info(f"Iniciando exportação Excel ({mode}): {target}")
+            
+            # Refatoração: Uso de ExportWorker para não travar a UI
+            worker = ExportWorker(
+                self.export_service.export_excel,
+                target, 
+                df, 
+                sheet_name=self.state.current_file.stem if self.state.current_file else "Dados"
+            )
+            worker.finished.connect(lambda path: self.show_info("Exportação concluída", f"Arquivo gerado em:\n{path}"))
+            worker.finished.connect(lambda: self.status.showMessage("Exportação concluída."))
+            worker.failed.connect(lambda msg: self.show_error("Falha na exportação", msg))
+            worker.failed.connect(lambda msg: self.logger.error(f"Erro exportação Excel: {msg}"))
+            
+            # Mantemos referência para evitar GC
+            self._export_worker = worker
+            worker.start()
+
         except Exception as exc:
+            self.logger.exception("Falha ao preparar exportação Excel")
             self.show_error("Falha na exportação para Excel", str(exc))
 
     def export_docx(self) -> None:
@@ -993,17 +1060,30 @@ class MainWindow(QMainWindow):
             target = self._save_dialog("Salvar relatório Word", "Word (*.docx)")
             if not target:
                 return
-            self.export_service.export_docx(
+
+            self.status.showMessage("Gerando relatório Word...")
+            self.logger.info(f"Iniciando exportação Docx: {target}")
+            
+            worker = ExportWorker(
+                self.export_service.export_docx,
                 target,
-                title="Relatório Padronizado de Análise Fiscal",
-                cnpj=self.state.current_cnpj or "",
-                table_name=self.state.current_file.name,
-                df=df,
-                filters_text=self._filters_text(),
-                visible_columns=self.state.visible_columns or [],
+                "Relatório Padronizado de Análise Fiscal",
+                self.state.current_cnpj or "N/D",
+                self.state.current_file.name,
+                df,
+                self._filters_text(),
+                self.state.visible_columns or [],
             )
-            self.show_info("Relatório gerado", f"Arquivo gerado em:\n{target}")
+            worker.finished.connect(lambda path: self.show_info("Relatório gerado", f"Arquivo gerado em:\n{path}"))
+            worker.finished.connect(lambda: self.status.showMessage("Relatório Word gerado."))
+            worker.failed.connect(lambda msg: self.show_error("Falha na exportação Word", msg))
+            worker.failed.connect(lambda msg: self.logger.error(f"Erro exportação Word: {msg}"))
+            
+            self._export_worker = worker
+            worker.start()
+
         except Exception as exc:
+            self.logger.exception("Falha ao preparar exportação Word")
             self.show_error("Falha na exportação para Word", str(exc))
 
     def export_txt_html(self) -> None:
@@ -1022,9 +1102,22 @@ class MainWindow(QMainWindow):
             target = self._save_dialog("Salvar TXT com HTML", "TXT (*.txt)")
             if not target:
                 return
-            self.export_service.export_txt_with_html(target, html_report)
-            self.show_info("Relatório HTML/TXT gerado", f"Arquivo gerado em:\n{target}")
+
+            self.status.showMessage("Salvando relatório HTML/TXT...")
+            
+            worker = ExportWorker(
+                self.export_service.export_txt_with_html,
+                target,
+                html_report
+            )
+            worker.finished.connect(lambda path: self.show_info("Exportação concluída", f"Arquivo gerado em:\n{path}"))
+            worker.failed.connect(lambda msg: self.show_error("Falha na exportação TXT/HTML", msg))
+            
+            self._export_worker = worker
+            worker.start()
+
         except Exception as exc:
+            self.logger.exception("Erro ao preparar exportação TXT/HTML")
             self.show_error("Falha na exportação TXT/HTML", str(exc))
 
     def open_editable_aggregation_table(self) -> None:
@@ -1068,28 +1161,39 @@ class MainWindow(QMainWindow):
             self.show_error("Seleção insuficiente", "Marque pelo menos duas linhas com 'Visto' (pode ser em ambas as tabelas) para agregar.")
             return
 
-        try:
-            result = self.servico_agregacao.agregar_linhas(
-                cnpj=self.state.current_cnpj,
-                linhas_selecionadas=combined,
-            )
-            # Update the tables to reflect the changes
+        self.status.showMessage("Agregando descrições...")
+        self.logger.info(f"Iniciando agregação para {self.state.current_cnpj} ({len(combined)} itens)")
+        
+        # Refatoração: Uso de AggregationWorker para operação pesada de CPU/IO
+        worker = AggregationWorker(
+            self.servico_agregacao,
+            self.state.current_cnpj,
+            combined,
+            [] # Tabelas extras se necessário
+        )
+        
+        def on_finished(result):
             self.atualizar_tabelas_agregacao()
             self.recarregar_historico_agregacao(self.state.current_cnpj)
-            
+            self.status.showMessage("Agregação concluída.")
             self.show_info(
                 "Agregação concluída",
                 f"As {len(combined)} descrições foram unificadas em:\n'{result.linha_agregada['descricao']}'"
             )
-        except Exception as e:
-            import traceback
-            traceback.print_exc()
-            self.show_error("Erro na agregação", f"Ocorreu um erro ao agregar: {e}")
-            
-            # Clear checks and reload top table
+
+        def on_failed(msg):
+            self.show_error("Falha na agregação", msg)
+            self.logger.error(f"Erro agregação: {msg}")
+            # Limpa seleções em caso de erro para permitir nova tentativa limpa
             self.aggregation_table_model.clear_checked()
             self.results_table_model.clear_checked()
             self.open_editable_aggregation_table()
+
+        worker.finished.connect(on_finished)
+        worker.failed.connect(on_failed)
+        
+        self._aggregation_worker = worker
+        worker.start()
 
     def apply_quick_filters(self) -> None:
         idx = self.tabs.currentIndex()
@@ -1459,14 +1563,11 @@ class MainWindow(QMainWindow):
             self._sql_result_page = 1
             self._show_sql_result_page()
             return
-        # Filtrar em todas as colunas (cast para string)
-        exprs = [
+        # Refatoração: Uso de any_horizontal para performance superior no motor Rust
+        combined = pl.any_horizontal([
             pl.col(c).cast(pl.Utf8, strict=False).fill_null("").str.to_lowercase().str.contains(search, literal=True)
             for c in self._sql_result_df.columns
-        ]
-        combined = exprs[0]
-        for e in exprs[1:]:
-            combined = combined | e
+        ])
         filtered = self._sql_result_df.filter(combined)
         if filtered.height == 0:
             self._set_sql_status(f"ℹ️  Busca '{search}' não encontrou resultados.", "#e0e7ff", "#3730a3")
@@ -1493,7 +1594,20 @@ class MainWindow(QMainWindow):
             return
         try:
             sql_name = self.sql_combo.currentText().split("[")[0].strip() or "consulta_sql"
-            self.export_service.export_excel(target, self._sql_result_df, sheet_name=sql_name[:31])
-            self.show_info("Exportação concluída", f"Arquivo gerado em:\n{target}")
+            self.status.showMessage("Exportando resultados SQL...")
+            
+            worker = ExportWorker(
+                self.export_service.export_excel,
+                target, 
+                self._sql_result_df, 
+                sheet_name=sql_name[:31]
+            )
+            worker.finished.connect(lambda path: self.show_info("Exportação concluída", f"Arquivo gerado em:\n{path}"))
+            worker.failed.connect(lambda msg: self.show_error("Falha na exportação", msg))
+            
+            self._export_worker = worker
+            worker.start()
+            
         except Exception as exc:
+            self.logger.exception("Erro ao exportar resultados SQL")
             self.show_error("Falha na exportação", str(exc))

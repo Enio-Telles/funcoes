@@ -54,8 +54,8 @@ class ServicoAgregacao:
 
     @staticmethod
     def caminho_tabela_origem(cnpj: str) -> Path:
-        """Caminho para a tabela de descrições gerada pelo pipeline."""
-        return CNPJ_ROOT / cnpj / "analises" / "produtos" / f"tabela_descricoes_{cnpj}.parquet"
+        """Caminho para a tabela de produtos consolidados (Módulo 2)."""
+        return CNPJ_ROOT / cnpj / "analises" / "produtos" / f"tabela_produtos_consolidada_{cnpj}.parquet"
 
     def carregar_tabela_editavel(self, cnpj: str) -> Path:
         """Copia a tabela de descrições para a tabela editável se esta não existir, ou atualiza o schema."""
@@ -323,7 +323,7 @@ class ServicoAgregacao:
     def recalcular_todos_padroes(self, cnpj: str) -> bool:
         """Recalcula campos padrão (NCM, CEST, GTIN, etc)."""
         destino = self.caminho_tabela_editavel(cnpj)
-        arq_itens = CNPJ_ROOT / cnpj / "analises" / "produtos" / f"tabela_itens_caracteristicas_{cnpj}.parquet"
+        arq_itens = CNPJ_ROOT / cnpj / "analises" / "produtos" / f"tabela_unidades_base_{cnpj}.parquet"
         
         if not destino.exists() or not arq_itens.exists():
              return False
@@ -380,8 +380,8 @@ class ServicoAgregacao:
         destino = self.caminho_tabela_editavel(cnpj)
         if not destino.exists():
             return False
-
-        arq_itens = CNPJ_ROOT / cnpj / "analises" / "produtos" / f"tabela_itens_caracteristicas_{cnpj}.parquet"
+        
+        arq_itens = CNPJ_ROOT / cnpj / "analises" / "produtos" / f"tabela_unidades_base_{cnpj}.parquet"
         if not arq_itens.exists():
             return False
 

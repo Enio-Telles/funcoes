@@ -1,95 +1,102 @@
-import re
-import concurrent.futures
 import polars as pl
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
 from rich import print as rprint
-
 from .conexao import conectar
 from .leitor_sql import ler_sql
-from ..utilitarios.validacao import validar_cnpj
-from ..utilitarios.parquet_utils import salvar_para_parquet
+from .extrair_parametros import extrair_parametros_sql
 
-def processar_arquivo_sql(arq_sql: Path, cnpj_limpo: str, data_limite: str, consultas_dir: Path, pasta_saida_base: Path):
+def processar_arquivo_sql(arq_sql: Path, consultas_dir: Path, pasta_saida: Path, cnpj: str, data_limite: str):
     """
-    Executa uma consulta SQL no Oracle e salva o resultado em Parquet.
-    Cada thread abre e fecha sua própria conexão para garantir thread-safety.
+    Executa uma consulta SQL no Oracle e salva o resultado em um arquivo Parquet usando chunks para evitar OOM.
+    Refatoração 2: Memória (fetchmany) + Validação de Binds + Path Safe.
     """
     try:
-        # Abertura de conexão local dentro da thread (conforme Tarefa 2)
-        with conectar() as conexao:
-            with conexao.cursor() as cursor:
-                cursor.arraysize = 5000 
-                
-                sql_txt = ler_sql(arq_sql)
-                if not sql_txt:
-                    return True
+        # Refatoração 2.2: Path Safe
+        try:
+            caminho_relativo = arq_sql.relative_to(consultas_dir)
+        except ValueError:
+            # Caso o SQL não esteja dentro do diretório de consultas esperado
+            caminho_relativo = Path(arq_sql.name)
+            
+        nome_tabela = arq_sql.stem.lower()
+        arquivo_saida = pasta_saida / f"{nome_tabela}_{cnpj}.parquet"
 
-                cursor.prepare(sql_txt)
-                nomes_binds = [b.upper() for b in cursor.bindnames()]
+        sql_text = ler_sql(arq_sql)
+        if not sql_text:
+            rprint(f"[red]Erro ao ler arquivo SQL: {arq_sql}[/red]")
+            return
 
-                binds = {}
-                if "CNPJ" in nomes_binds:
-                    binds["CNPJ"] = cnpj_limpo
-                else:
-                    rprint(f"[yellow]⚠️ {arq_sql.name} ignorado (sem bind :CNPJ)[/yellow]")
-                    return True
-
-                if "DATA_LIMITE_PROCESSAMENTO" in nomes_binds:
-                    binds["DATA_LIMITE_PROCESSAMENTO"] = data_limite
-
-                cursor.execute(None, binds)
-                colunas = [col[0] for col in cursor.description]
-                dados = cursor.fetchall()
-
-                if not dados:
-                    rprint(f"[yellow]  Zero linhas para {arq_sql.name}[/yellow]")
-                    return True
-
-                df = pl.DataFrame(dados, schema=colunas, orient="row")
-                
-                # Caminhos Unificados (conforme Tarefa 1)
-                # arq_sql pode estar em subpastas dentro de consultas_dir
-                caminho_relativo = arq_sql.relative_to(consultas_dir)
-                # Salva em pasta_sa_base/tabelas_brutas/subpastas
-                arquivo_saida = pasta_saida_base / caminho_relativo.parent / f"{arq_sql.stem}_{cnpj_limpo}.parquet"
-                
-                # Garantia de criação de diretórios
-                arquivo_saida.parent.mkdir(parents=True, exist_ok=True)
-
-                return salvar_para_parquet(df, arquivo_saida)
-
-    except Exception as e:
-        rprint(f"[red]  ❌ Erro em {arq_sql.name}: {e}[/red]")
-        return False
-
-def extrair_por_cnpj(cnpj: str, data_limite: str = None, pasta_consultas: Path = None, pasta_base_saida: Path = None):
-    """
-    Orquestra a extração de múltiplos arquivos SQL para um CNPJ usando ThreadPoolExecutor.
-    """
-    if not validar_cnpj(cnpj):
-        rprint(f"[red]CNPJ {cnpj} inválido[/red]")
-        return False
-
-    cnpj_limpo = re.sub(r'[^0-9]', '', cnpj)
-    
-    # Destino definitivo: no diretório do CNPJ dentro de 'tabelas_brutas' (Tarefa 1)
-    pasta_saida_cnpj = pasta_base_saida / cnpj_limpo / "tabelas_brutas"
-    pasta_saida_cnpj.mkdir(parents=True, exist_ok=True)
-    
-    arquivos_sql = list(pasta_consultas.rglob("*.sql"))
-    if not arquivos_sql:
-        rprint("[yellow]Nenhuma consulta encontrada[/yellow]")
-        return False
-
-    rprint(f"[bold cyan]Extraindo {len(arquivos_sql)} consultas para {cnpj_limpo}...[/bold cyan]")
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
-        futuros = {
-            executor.submit(processar_arquivo_sql, arq, cnpj_limpo, data_limite, pasta_consultas, pasta_saida_cnpj): arq 
-            for arq in arquivos_sql
+        # Refatoração 2.3: Validação de Binds
+        binds_necessarios = extrair_parametros_sql(sql_text)
+        valores_disponiveis = {
+            "cnpj": cnpj,
+            "data_limite_processamento": data_limite
         }
         
-        for futuro in concurrent.futures.as_completed(futuros):
-            futuro.result()
+        # Validar se todas as variáveis da query estão no dicionário
+        for bind in binds_necessarios:
+            if bind.lower() not in [v.lower() for v in valores_disponiveis.keys()]:
+                rprint(f"[red]Erro: Bind '{bind}' exigido na query '{nome_tabela}' não foi fornecido.[/red]")
+                return
+            # Se for data_limite_processamento e estiver nulo, podemos ter erro no Oracle dependendo da query
+            if bind.lower() == "data_limite_processamento" and not data_limite:
+                rprint(f"[yellow]Aviso: Query '{nome_tabela}' exige data_limite, mas o valor é nulo.[/yellow]")
+
+        with conectar() as conn:
+            with conn.cursor() as cursor:
+                # Refatoração 2.1: Chunked Extraction (Prevenção de OOM)
+                # Ajustamos arraysize para performance de rede e fetchmany para RAM
+                cursor.arraysize = 50_000 
+                cursor.execute(sql_text, {k: v for k, v in valores_disponiveis.items() if k in [b.lower() for b in binds_necessarios]})
+                
+                colunas = [desc[0].lower() for desc in cursor.description]
+                
+                # Vamos ler em blocos e concatenar no Polars
+                chunks = []
+                total_linhas = 0
+                
+                while True:
+                    rows = cursor.fetchmany(50_000)
+                    if not rows:
+                        break
+                    
+                    # Cria DataFrame do chunk
+                    chunk_df = pl.DataFrame([dict(zip(colunas, row)) for row in rows], infer_schema_length=50000)
+                    chunks.append(chunk_df)
+                    total_linhas += len(rows)
+                    # Opcional: rprint(f"  {nome_tabela}: {total_linhas:,} linhas lidas...")
+
+                if chunks:
+                    df_final = pl.concat(chunks)
+                    arquivo_saida.parent.mkdir(parents=True, exist_ok=True)
+                    df_final.write_parquet(arquivo_saida, compression="snappy")
+                    rprint(f"[green]✔ {nome_tabela} extraído ({total_linhas:,} linhas).[/green]")
+                else:
+                    # Salva tabela vazia com as colunas corretas
+                    df_vazio = pl.DataFrame({col: [] for col in colunas})
+                    df_vazio.write_parquet(arquivo_saida)
+                    rprint(f"[yellow]! {nome_tabela} extraída (0 linhas).[/yellow]")
+
+    except Exception as e:
+        rprint(f"[red]Erro ao extrair {arq_sql.name}: {e}[/red]")
+
+def extrair_por_cnpj(cnpj: str, data_limite: str, pasta_consultas: Path, pasta_base_saida: Path):
+    """
+    Gerencia a extração concorrente de múltiplos arquivos SQL.
+    """
+    pasta_saida = pasta_base_saida / cnpj / "tabelas_brutas"
+    pasta_saida.mkdir(parents=True, exist_ok=True)
+
+    arquivos_sql = list(pasta_consultas.glob("*.sql"))
+    if not arquivos_sql:
+        rprint("[yellow]Nenhum arquivo .sql encontrado.[/yellow]")
+        return False
+
+    rprint(f"[bold]Iniciando extração para {cnpj} ({len(arquivos_sql)} tabelas)...[/bold]")
+    
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        for arq in arquivos_sql:
+            executor.submit(processar_arquivo_sql, arq, pasta_consultas, pasta_saida, cnpj, data_limite)
 
     return True

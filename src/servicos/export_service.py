@@ -1,37 +1,41 @@
 from __future__ import annotations
 
 import html
+import shutil
+import tempfile
 from datetime import datetime
 from pathlib import Path
-from typing import Any
 
 import polars as pl
 from docx import Document
-from docx.shared import Inches
-from openpyxl import Workbook
 
 from src.config import MAX_DOCX_ROWS
 from src.utilitarios.text import display_cell
 
-
 class ExportService:
     @staticmethod
     def _iter_rows(df: pl.DataFrame):
-        for row in df.iter_rows(named=True):
-            yield [display_cell(row.get(col)) for col in df.columns]
+        """
+        Otimização: Iteração por tuplas evita a criação de dicionários
+        pesados para cada linha, melhorando performance e memória.
+        """
+        for row in df.iter_rows():
+            yield [display_cell(cell) for cell in row]
 
     def export_excel(self, target: Path, df: pl.DataFrame, sheet_name: str = "Dados") -> Path:
+        """
+        Otimização: Substituído o loop manual do openpyxl pelo motor nativo do Polars.
+        Utiliza write_excel com autofit, muito mais rápido para grandes volumes.
+        """
         target.parent.mkdir(parents=True, exist_ok=True)
-        wb = Workbook()
-        ws = wb.active
-        ws.title = sheet_name[:31]
-        ws.append(df.columns)
-        for row in self._iter_rows(df):
-            ws.append(row)
-        ws.freeze_panes = "A2"
-        for col in ws.columns:
-            ws.column_dimensions[col[0].column_letter].width = min(max(len(str(col[0].value or "")) + 2, 12), 40)
-        wb.save(target)
+        # Polars usa o xlsxwriter ou calamine por baixo (se disponível)
+        # Nota: worksheet name no Excel tem limite de 31 caracteres
+        df.write_excel(
+            target, 
+            worksheet=sheet_name[:31], 
+            table_style="Table Style Medium 9",
+            autofit=True
+        )
         return target
 
     def build_html_report(
@@ -85,8 +89,23 @@ th {{ background: #eef2f7; position: sticky; top: 0; }}
 </html>"""
 
     def export_txt_with_html(self, target: Path, html_report: str) -> Path:
+        """
+        Segurança: Gravação atômica via arquivo temporário.
+        Evita corrupção de arquivos em caso de falha durante a escrita.
+        """
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(html_report, encoding="utf-8")
+        
+        with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', delete=False, suffix='.tmp') as tf:
+            tf.write(html_report)
+            temp_path = Path(tf.name)
+            
+        try:
+            shutil.move(str(temp_path), str(target))
+        except Exception as e:
+            if temp_path.exists():
+                temp_path.unlink()
+            raise e
+            
         return target
 
     def export_docx(
@@ -119,9 +138,12 @@ th {{ background: #eef2f7; position: sticky; top: 0; }}
         header_cells = table.rows[0].cells
         for idx, col in enumerate(df.columns):
             header_cells[idx].text = str(col)
+            
+        # Otimização: iter_rows() sem named=True
         for row in self._iter_rows(df.head(rows_to_write)):
             cells = table.add_row().cells
             for idx, value in enumerate(row):
                 cells[idx].text = value
+                
         doc.save(target)
         return target

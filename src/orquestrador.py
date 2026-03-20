@@ -4,25 +4,25 @@ from pathlib import Path
 from rich import print as rprint
 import sys
 
-# Adiciona a raiz do projeto (c:/funcoes) ao sys.path para permitir imports absolutos
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
-
 # Importar constantes do config
 from src.config import SQL_DIR, CNPJ_ROOT as DIR_DADOS, DIR_REFERENCIAS
 
-# Importar funções de transformação
+# Importar ferramentas de extração e utilitários
 from src.extracao.extrator import extrair_por_cnpj
-from src.transformacao.analise_produtos.documentos import processar_tabela_documentos
-from src.transformacao.analise_produtos.itens import processar_tabela_itens
-from src.transformacao.analise_produtos.produtos import processar_tabela_produtos
-from src.transformacao.analise_produtos.enriquecimento import enriquecer_itens_com_referencias
 from src.utilitarios.parquet_utils import salvar_para_parquet
+
+# Importar NOVAS funções de transformação modular
+from src.transformacao.produtos_unidades import gerar_tabela_produtos_unidades
+from src.transformacao.produtos import gerar_tabela_produtos_normalizados
+from src.transformacao.produtos_agrupados import produtos_agrupados
+from src.transformacao.fatores_conversao import calcular_fatores_conversao
+
+# Importar transformações secundárias (manter se necessário)
+from src.transformacao.analise_produtos.documentos import processar_tabela_documentos
 
 def executar_extrair(cnpj: str, data_limite: str, caminho_sql: Path, caminho_dados_raiz: Path) -> bool:
     """Etapa 1: Extração de Dados Brutos."""
-    rprint(f"[cyan]Extraindo dados do Oracle em {caminho_dados_raiz / cnpj / 'tabelas_brutas'}... [/cyan]")
+    rprint(f"[cyan]Extraindo dados do Oracle para o CNPJ {cnpj}... [/cyan]")
     return extrair_por_cnpj(
         cnpj=cnpj, 
         data_limite=data_limite, 
@@ -31,8 +31,9 @@ def executar_extrair(cnpj: str, data_limite: str, caminho_sql: Path, caminho_dad
     )
 
 def executar_processar(cnpj: str, caminho_dados_raiz: Path) -> bool:
-    """Etapa 2: Transformação e Consolidação."""
-    rprint("[yellow]Iniciando processamento e consolidação de tabelas...[/yellow]")
+    """Etapa 2: Transformação Modular e Enriquecimento."""
+    rprint(f"[yellow]Iniciando redesign modular de produtos para CNPJ: {cnpj}[/yellow]")
+    
     pasta_tabelas = caminho_dados_raiz / cnpj / "tabelas_brutas"
     pasta_analises = caminho_dados_raiz / cnpj / "analises" / "produtos"
     pasta_analises.mkdir(parents=True, exist_ok=True)
@@ -43,41 +44,59 @@ def executar_processar(cnpj: str, caminho_dados_raiz: Path) -> bool:
             return None
         return pl.read_parquet(p)
 
+    # 1. Carregar Dados Brutos
     df_c100 = _ler_tab("c100")
     df_c170 = _ler_tab("c170")
     df_nfe = _ler_tab("nfe")
+    df_nfce = _ler_tab("nfce")
     df_bloco_h = _ler_tab("bloco_h")
     
+    # Carregar Referência de CFOP para classificação de compras/vendas
+    p_cfop = DIR_REFERENCIAS / "cfop_bi.parquet"
+    df_cfop_ref = pl.read_parquet(p_cfop) if p_cfop.exists() else None
+
     if df_c170 is None and df_nfe is None:
-        rprint("[red]❌ Dados brutos (C170/NFe) não encontrados em " + str(pasta_tabelas) + ". Execute a extração primeiro.[/red]")
+        rprint("[red]❌ Dados críticos (C170/NFe) não encontrados. Execute a extração primeiro.[/red]")
         return False
 
-    rprint("[cyan]Consolidando movimentação de itens...[/cyan]")
-    df_itens_base = processar_tabela_itens(cnpj, df_c170=df_c170, df_nfe_itens=df_nfe, df_bloco_h=df_bloco_h)
+    # 2. Unificar Unidades (Módulo 1)
+    rprint("[cyan]Módulo 1: Gerando tabela base de unidades (Movimentação)...[/cyan]")
+    df_unidades = gerar_tabela_produtos_unidades(
+        cnpj=cnpj,
+        df_c170=df_c170,
+        df_nfe_itens=df_nfe,
+        df_nfce_itens=df_nfce,
+        df_bloco_h=df_bloco_h,
+        df_cfop_ref=df_cfop_ref
+    )
     
-    rprint("[cyan]Executando enriquecimento (Paramétricas + Cruzamentos)...[/cyan]")
-    p_sefin = DIR_REFERENCIAS / "CO_SEFIN" / "sitafe_produto_sefin.parquet"
-    p_fatores = DIR_REFERENCIAS / "fatores_conversao_unidades.parquet"
+    # 3. Normalizar e Agrupar Produtos (Módulo 2)
+    rprint("[cyan]Módulo 2: Normalizando descrições e gerando chaves de produto...[/cyan]")
+    df_produtos = gerar_tabela_produtos_normalizados(df_unidades)
     
-    df_sefin = pl.read_parquet(p_sefin) if p_sefin.exists() else pl.DataFrame()
-    df_fatores = pl.read_parquet(p_fatores) if p_fatores.exists() else pl.DataFrame()
+    # 4. Agrupamento Final e Heurísticas (Módulo 3)
+    rprint("[cyan]Módulo 3: Aplicando heurística de atributos padrão (NCM, CEST, GTIN)...[/cyan]")
+    # Nota: df_manual poderia vir de uma tabela editável persistida
+    df_final = produtos_agrupados(df_produtos, df_manual=None)
     
-    if df_sefin.is_empty():
-        rprint("[yellow]⚠️  Tabela SEFIN não encontrada. Enriquecimento limitado.[/yellow]")
-
-    df_itens_enriquecido = enriquecer_itens_com_referencias(df_itens_base, df_sefin, df_fatores)
+    # 5. Cálculo de Fatores de Conversão (Módulo 4)
+    rprint("[cyan]Módulo 4: Calculando fatores de conversão entre unidades...[/cyan]")
+    df_fatores = calcular_fatores_conversao(df_unidades, df_final)
     
-    rprint("[cyan]Agrupando produtos consolidados...[/cyan]")
-    df_produtos = processar_tabela_produtos(df_itens_enriquecido)
-    
+    # Processamento de Documentos (Opcional/Secundário)
     df_docs = processar_tabela_documentos(df_nfe) if df_nfe is not None else None
 
-    rprint("[yellow]Salvando resultados finais no analises/produtos...[/yellow]")
-    salvar_para_parquet(df_itens_enriquecido, pasta_analises / f"tabela_itens_caracteristicas_{cnpj}.parquet")
-    salvar_para_parquet(df_produtos, pasta_analises / f"tabela_descricoes_{cnpj}.parquet")
+    # 6. Salvar Resultados
+    rprint("[yellow]Salvando resultados do redesign modular...[/yellow]")
+    salvar_para_parquet(df_unidades, pasta_analises / f"tabela_unidades_base_{cnpj}.parquet")
+    salvar_para_parquet(df_produtos, pasta_analises / f"tabela_produtos_consolidada_{cnpj}.parquet")
+    salvar_para_parquet(df_final, pasta_analises / f"tabela_produtos_final_{cnpj}.parquet")
+    salvar_para_parquet(df_fatores, pasta_analises / f"tabela_fatores_conversao_{cnpj}.parquet")
+    
     if df_docs is not None:
          salvar_para_parquet(df_docs, pasta_analises / f"tabela_documentos_{cnpj}.parquet")
     
+    rprint(f"[bold green]✅ Processamento concluído: {df_final.height} produtos únicos identificados.[/bold green]")
     return True
 
 def executar_pipeline_completo(cnpj: str, data_limite: str = None, pasta_sql_path: Path = None, pasta_dados_path: Path = None, apenas_extrair: bool = False, apenas_processar: bool = False):
