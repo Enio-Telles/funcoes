@@ -1,7 +1,8 @@
 """
 Serviço de pipeline que orquestra:
   1. Extração Oracle — executa SQLs selecionados de c:\\funcoes\\consultas_fonte
-  2. Geração de tabelas — executa funções de c:\\funcoes\\funcoes_tabelas\\tabela_produtos
+  2. Geração de tabelas — executa o pipeline oficial de produtos em
+     c:\\funcoes\\funcoes_tabelas\\tabela_produtos
 
 Salva:
   - Parquets brutos em  c:\\funcoes\\CNPJ\\<cnpj>\\arquivos_parquet\\
@@ -17,34 +18,23 @@ from typing import Any, Callable
 
 import polars as pl
 
-# ──────────────────────────────────────────────
-# Paths do c:\funcoes
-# ──────────────────────────────────────────────
 FUNCOES_DIR = Path(r"c:\funcoes")
 AUXILIARES_DIR = FUNCOES_DIR / "funcoes_auxiliares"
 TABELA_PRODUTOS_DIR = FUNCOES_DIR / "funcoes_tabelas" / "tabela_produtos"
 CONSULTAS_FONTE_DIR = FUNCOES_DIR / "consultas_fonte"
 CNPJ_ROOT = FUNCOES_DIR / "CNPJ"
 
-# Garante que os módulos auxiliares estejam no path
 for _dir in [str(AUXILIARES_DIR), str(TABELA_PRODUTOS_DIR)]:
     if _dir not in sys.path:
         sys.path.insert(0, _dir)
 
-# ──────────────────────────────────────────────
-# Imports das funções auxiliares de c:\funcoes
-# ──────────────────────────────────────────────
 from conectar_oracle import conectar as conectar_oracle
 from ler_sql import ler_sql
 from extrair_parametros import extrair_parametros_sql
 
 
-# ──────────────────────────────────────────────
-# Tipos
-# ──────────────────────────────────────────────
 @dataclass
 class ResultadoPipeline:
-    """Resultado da execução do pipeline."""
     ok: bool
     cnpj: str
     mensagens: list[str] = field(default_factory=list)
@@ -52,44 +42,61 @@ class ResultadoPipeline:
     erros: list[str] = field(default_factory=list)
 
 
-# ──────────────────────────────────────────────
-# Registro das tabelas disponíveis
-# ──────────────────────────────────────────────
 TABELAS_DISPONIVEIS: list[dict[str, str]] = [
     {
-        "id": "tabela_itens_caracteristicas",
-        "nome": "Tabela Itens Características",
-        "descricao": "Consolida NFe, NFCe, C170, Bloco H em itens únicos normalizados",
-        "modulo": "tabela_itens_caracteristicas",
-        "funcao": "gerar_tabela_itens_caracteristicas",
+        "id": "produtos_unidades",
+        "nome": "Produtos por Unidade",
+        "descricao": "Tabela base de movimentações por unidade com compras, vendas e co_sefin_item.",
+        "modulo": "produtos_unidades",
+        "funcao": "gerar_produtos_unidades",
     },
     {
-        "id": "tabela_descricoes",
-        "nome": "Tabela Descrições (para agregação)",
-        "descricao": "Agrupa produtos por descrição normalizada — base para agregação manual",
-        "modulo": "tabela_descricoes",
-        "funcao": "gerar_tabela_descricoes",
+        "id": "produtos",
+        "nome": "Produtos Normalizados",
+        "descricao": "Agrupa produtos por descrição normalizada e consolida listas de atributos.",
+        "modulo": "produtos",
+        "funcao": "gerar_tabela_produtos",
     },
     {
-        "id": "tabela_codigos",
-        "nome": "Tabela Códigos com Múltiplas Descrições",
-        "descricao": "Identifica códigos que possuem mais de uma descrição",
-        "modulo": "tabela_codigos",
-        "funcao": "gerar_tabela_codigos",  # name correction below
+        "id": "produtos_agrupados",
+        "nome": "Produtos Agrupados",
+        "descricao": "Agrupamento manual/final com descr_padrao, co_sefin_padrao e lista_unidades.",
+        "modulo": "produtos_agrupados",
+        "funcao": "gerar_produtos_agrupados",
     },
     {
-        "id": "fator_conversao",
-        "nome": "Fator de Conversão de Unidades",
-        "descricao": "Calcula fatores de conversão anuais baseados em preços médios",
-        "modulo": "fator_conversao",
-        "funcao": "calcular_fator_conversao",
+        "id": "produtos_final",
+        "nome": "Produtos Final",
+        "descricao": "Tabela derivada de produtos_agrupados com vínculo produto → agrupamento final.",
+        "modulo": "produtos_agrupados",
+        "funcao": "gerar_produtos_agrupados",
+    },
+    {
+        "id": "fatores_conversao",
+        "nome": "Fatores de Conversão",
+        "descricao": "Calcula fatores por unidade a partir de produtos_final e preços médios.",
+        "modulo": "fatores_conversao",
+        "funcao": "gerar_fatores_conversao",
     },
 ]
 
+TABELAS_LEGADAS_SUBSTITUIDAS = {
+    "tabela_itens_caracteristicas": "produtos_unidades",
+    "tabela_descricoes": "produtos",
+    "tabela_codigos": "produtos_agrupados",
+    "tabela_codigos_mais_descricoes": "produtos_agrupados",
+    "fator_conversao": "fatores_conversao",
+}
 
-# ──────────────────────────────────────────────
-# Serviço
-# ──────────────────────────────────────────────
+ORDEM_OFICIAL = [
+    "produtos_unidades",
+    "produtos",
+    "produtos_agrupados",
+    "produtos_final",
+    "fatores_conversao",
+]
+
+
 class ServicoExtracao:
     """Executa consultas SQL Oracle e salva os resultados como Parquet."""
 
@@ -98,7 +105,6 @@ class ServicoExtracao:
         self.cnpj_root = cnpj_root
 
     def listar_consultas(self) -> list[Path]:
-        """Lista todos os arquivos .sql disponíveis em consultas_fonte."""
         if not self.consultas_dir.exists():
             return []
         return sorted(
@@ -128,12 +134,10 @@ class ServicoExtracao:
 
     @staticmethod
     def extrair_parametros(sql_text: str) -> set[str]:
-        """Extrai bind variables do SQL usando extrair_parametros.py."""
         return extrair_parametros_sql(sql_text)
 
     @staticmethod
     def montar_binds(sql_text: str, valores: dict[str, Any]) -> dict[str, Any]:
-        """Monta o dicionário de binds para execução Oracle."""
         parametros = extrair_parametros_sql(sql_text)
         valores_lower = {k.lower(): v for k, v in valores.items()}
         binds: dict[str, Any] = {}
@@ -148,18 +152,6 @@ class ServicoExtracao:
         data_limite: str | None = None,
         progresso: Callable[[str], None] | None = None,
     ) -> list[str]:
-        """
-        Executa as consultas SQL selecionadas contra Oracle.
-
-        Args:
-            cnpj: CNPJ numérico (14 dígitos).
-            consultas: Lista de caminhos para arquivos .sql.
-            data_limite: Valor para :data_limite_processamento (DD/MM/YYYY).
-            progresso: Callback para mensagens de progresso.
-
-        Returns:
-            Lista de caminhos dos parquets gerados.
-        """
         def _msg(texto: str):
             if progresso:
                 progresso(texto)
@@ -183,7 +175,6 @@ class ServicoExtracao:
                     _msg(f"⚠️ Não foi possível ler {sql_path.name}")
                     continue
 
-                # Montar binds automaticamente
                 valores = {
                     "CNPJ": cnpj,
                     "cnpj": cnpj,
@@ -192,13 +183,11 @@ class ServicoExtracao:
                 }
                 binds = self.montar_binds(sql_text, valores)
 
-                # Executar
                 try:
                     with conn.cursor() as cursor:
                         cursor.arraysize = 50_000
                         cursor.prefetchrows = 50_000
                         cursor.execute(sql_text, binds)
-                        # Oracle names are normally uppercase; lowercase them for consistency
                         colunas = [desc[0].lower() for desc in cursor.description]
                         todas_linhas: list[tuple] = []
                         while True:
@@ -208,27 +197,20 @@ class ServicoExtracao:
                             todas_linhas.extend(lote)
                             _msg(f"  {sql_path.name}: {len(todas_linhas):,} linhas lidas...")
 
-                    # Converter para Polars e salvar
                     if todas_linhas:
                         try:
-                            # Tenta inferir com um sample maior
                             registros = [dict(zip(colunas, row)) for row in todas_linhas]
                             df = pl.DataFrame(registros, infer_schema_length=min(len(registros), 50000))
                         except Exception as e:
                             _msg(f"  ⚠️ Falha na inferência automática: {e}. Tentando modo robusto...")
-                            # Fallback: Cria coluna por coluna convertendo para string se necessário
-                            # Isso evita o erro "could not append value" em tipos mistos
-                            dados_colunas = {}
-                            for i, col_name in enumerate(colunas):
-                                dados_colunas[col_name] = [row[i] for row in todas_linhas]
-                            
+                            dados_colunas = {col_name: [row[i] for row in todas_linhas] for i, col_name in enumerate(colunas)}
                             try:
                                 df = pl.DataFrame(dados_colunas)
                             except Exception:
-                                # Última tentativa: tudo como string
-                                dados_string = {}
-                                for i, col_name in enumerate(colunas):
-                                    dados_string[col_name] = [str(row[i]) if row[i] is not None else None for row in todas_linhas]
+                                dados_string = {
+                                    col_name: [str(row[i]) if row[i] is not None else None for row in todas_linhas]
+                                    for i, col_name in enumerate(colunas)
+                                }
                                 df = pl.DataFrame(dados_string)
                     else:
                         df = pl.DataFrame({col: [] for col in colunas})
@@ -247,12 +229,20 @@ class ServicoExtracao:
 
 
 class ServicoTabelas:
-    """Executa as funções de geração de tabelas de c:\\funcoes\\funcoes_tabelas."""
+    """Executa apenas o pipeline oficial de produtos."""
 
     @staticmethod
     def listar_tabelas() -> list[dict[str, str]]:
-        """Retorna as tabelas disponíveis para geração."""
         return TABELAS_DISPONIVEIS[:]
+
+    @staticmethod
+    def _normalizar_tabelas_selecionadas(tabelas_selecionadas: list[str]) -> list[str]:
+        normalizadas: list[str] = []
+        for tab_id in tabelas_selecionadas:
+            destino = TABELAS_LEGADAS_SUBSTITUIDAS.get(tab_id, tab_id)
+            if destino not in normalizadas:
+                normalizadas.append(destino)
+        return [tab for tab in ORDEM_OFICIAL if tab in normalizadas]
 
     @staticmethod
     def gerar_tabelas(
@@ -260,69 +250,38 @@ class ServicoTabelas:
         tabelas_selecionadas: list[str],
         progresso: Callable[[str], None] | None = None,
     ) -> list[str]:
-        """
-        Executa as funções de geração na ordem correta de dependência.
-
-        Args:
-            cnpj: CNPJ numérico.
-            tabelas_selecionadas: Lista de IDs (ex: ["tabela_itens_caracteristicas", "tabela_descricoes"]).
-            progresso: Callback de progresso.
-
-        Returns:
-            Lista de nomes das tabelas geradas com sucesso.
-        """
         def _msg(texto: str):
             if progresso:
                 progresso(texto)
 
+        from pipeline_produtos import executar_pipeline_produtos, TABELAS_OFICIAIS_PRODUTOS
+
         cnpj = re.sub(r"\D", "", cnpj)
         pasta_cnpj = CNPJ_ROOT / cnpj
-        geradas: list[str] = []
+        selecionadas = ServicoTabelas._normalizar_tabelas_selecionadas(tabelas_selecionadas)
 
-        # Ordem de execução (respeita dependências)
-        ordem = ["tabela_itens_caracteristicas", "tabela_descricoes", "tabela_codigos", "fator_conversao"]
+        if not selecionadas:
+            _msg("⚠️ Nenhuma tabela válida selecionada.")
+            return []
 
-        for tab_id in ordem:
-            if tab_id not in tabelas_selecionadas:
-                continue
+        legadas = [t for t in tabelas_selecionadas if t in TABELAS_LEGADAS_SUBSTITUIDAS]
+        if legadas:
+            _msg(
+                "ℹ️ Seleções legadas detectadas: "
+                + ", ".join(f"{t}→{TABELAS_LEGADAS_SUBSTITUIDAS[t]}" for t in legadas)
+            )
 
-            info = next((t for t in TABELAS_DISPONIVEIS if t["id"] == tab_id), None)
-            if info is None:
-                continue
+        _msg("Gerando tabelas pelo pipeline oficial de produtos...")
+        ok = executar_pipeline_produtos(cnpj, pasta_cnpj)
+        if not ok:
+            raise RuntimeError("Falha ao executar o pipeline oficial de produtos.")
 
-            _msg(f"Gerando {info['nome']}...")
-            try:
-                funcao = _importar_funcao_tabela(info["modulo"], info["funcao"])
-                resultado = funcao(cnpj, pasta_cnpj)
-                if resultado:
-                    geradas.append(tab_id)
-                    _msg(f"✅ {info['nome']} gerada com sucesso.")
-                else:
-                    _msg(f"⚠️ {info['nome']} retornou False.")
-            except Exception as exc:
-                _msg(f"❌ Erro ao gerar {info['nome']}: {exc}")
-
+        geradas = [tab for tab in TABELAS_OFICIAIS_PRODUTOS if tab in ORDEM_OFICIAL]
+        _msg("✅ Pipeline oficial concluído. Tabelas novas geradas: " + ", ".join(geradas))
         return geradas
 
 
-def _importar_funcao_tabela(nome_modulo: str, nome_funcao: str) -> Callable:
-    """Importa dinamicamente uma função de geração de tabela."""
-    import importlib
-
-    # Os módulos estão em c:\funcoes\funcoes_tabelas\tabela_produtos
-    if str(TABELA_PRODUTOS_DIR) not in sys.path:
-        sys.path.insert(0, str(TABELA_PRODUTOS_DIR))
-
-    modulo = importlib.import_module(nome_modulo)
-    # Correção: tabela_codigos usa nome diferente
-    if nome_funcao == "gerar_tabela_codigos":
-        nome_funcao = "tabela_codigos_mais_descricoes"
-    return getattr(modulo, nome_funcao)
-
-
 class ServicoPipelineCompleto:
-    """Orquestra extração Oracle + geração de tabelas."""
-
     def __init__(self):
         self.servico_extracao = ServicoExtracao()
         self.servico_tabelas = ServicoTabelas()
@@ -335,7 +294,6 @@ class ServicoPipelineCompleto:
         data_limite: str | None = None,
         progresso: Callable[[str], None] | None = None,
     ) -> ResultadoPipeline:
-        """Executa pipeline completo: extração + tabelas."""
         cnpj = ServicoExtracao.sanitizar_cnpj(cnpj)
         resultado = ResultadoPipeline(ok=True, cnpj=cnpj)
 
@@ -344,20 +302,16 @@ class ServicoPipelineCompleto:
             if progresso:
                 progresso(texto)
 
-        # Fase 1: Extração Oracle
         if consultas:
             _msg(f"═══ Fase 1: Extração Oracle ({len(consultas)} consultas) ═══")
             try:
-                arquivos = self.servico_extracao.executar_consultas(
-                    cnpj, consultas, data_limite, _msg
-                )
+                arquivos = self.servico_extracao.executar_consultas(cnpj, consultas, data_limite, _msg)
                 resultado.arquivos_gerados.extend(arquivos)
             except Exception as exc:
                 resultado.erros.append(f"Falha na extração: {exc}")
                 resultado.ok = False
                 return resultado
 
-        # Fase 2: Geração de tabelas
         if tabelas:
             _msg(f"═══ Fase 2: Geração de tabelas ({len(tabelas)} selecionadas) ═══")
             try:
