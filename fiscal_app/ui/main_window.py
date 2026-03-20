@@ -82,20 +82,20 @@ class PipelineWorker(QThread):
     def run(self) -> None:
         try:
             result = self.service.executar_completo(
-                self.cnpj, 
-                self.consultas, 
-                self.tabelas, 
+                self.cnpj,
+                self.consultas,
+                self.tabelas,
                 self.data_limite,
-                progresso=self.progress.emit
+                progresso=self.progress.emit,
             )
         except Exception as exc:  # pragma: no cover - UI
             self.failed.emit(str(exc))
             return
-        
+
         if result.ok:
             self.finished_ok.emit(result)
         else:
-            message = "\n".join(result.erros) if result.erros else "Falha no pipeline."
+            message = "\n".join(result.erros) if result.erros else "Falha no pipeline oficial."
             self.failed.emit(message or "Falha sem detalhes.")
 
 
@@ -206,8 +206,10 @@ class MainWindow(QMainWindow):
         layout.addWidget(files_box)
 
         notes = QLabel(
-            "Fluxo recomendado: analise um CNPJ, abra a tabela desejada, filtre, selecione colunas e exporte. "
-            "Para agregação, trabalhe sobre a tabela desagregada e monte o lote na aba Agregação."
+            "Fluxo recomendado: execute as consultas SQL e gere o fluxo oficial de produtos "
+            "(produtos_unidades → produtos → produtos_agrupados/produtos_final → fatores_conversao). "
+            "Depois, abra a tabela desejada, filtre, selecione colunas e exporte. "
+            "Para revisões manuais, use as abas Agregação e Fatores de Conversão."
         )
         notes.setWordWrap(True)
         layout.addWidget(notes)
@@ -228,7 +230,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self._build_tab_consulta(), "Consulta")
         self.tabs.addTab(self._build_tab_sql_query(), "Consulta SQL")
         self.tabs.addTab(self._build_tab_agregacao(), "Agregação")
-        self.tabs.addTab(self._build_tab_conversao(), "Conversão")
+        self.tabs.addTab(self._build_tab_conversao(), "Fatores de Conversão")
         self.tabs.addTab(self._build_tab_logs(), "Logs")
         layout.addWidget(self.tabs)
         return panel
@@ -302,7 +304,7 @@ class MainWindow(QMainWindow):
         self.qf_ncm.setPlaceholderText("Filtrar NCM")
         self.qf_cest = QLineEdit()
         self.qf_cest.setPlaceholderText("Filtrar CEST")
-        
+
         for w in [self.qf_norm, self.qf_desc, self.qf_ncm, self.qf_cest]:
             w.setMaximumWidth(200)
             quick_filter_layout.addWidget(w)
@@ -331,13 +333,13 @@ class MainWindow(QMainWindow):
 
         top_box = QGroupBox("Tabela Editável (Selecione linhas para agregar)")
         top_layout = QVBoxLayout(top_box)
-        
+
         toolbar = QHBoxLayout()
-        self.btn_open_editable_table = QPushButton("Abrir tabela editável _2")
+        self.btn_open_editable_table = QPushButton("Abrir tabela editável do agrupamento")
         self.btn_execute_aggregation = QPushButton("Agregar Descrições (da seleção)")
         self.btn_recalc_defaults = QPushButton("♻️  Recalcular Padrões (Geral)")
         self.btn_recalc_totals = QPushButton("💰  Recalcular Totais")
-        
+
         toolbar.addWidget(self.btn_open_editable_table)
         toolbar.addWidget(self.btn_execute_aggregation)
         toolbar.addWidget(self.btn_recalc_defaults)
@@ -375,7 +377,7 @@ class MainWindow(QMainWindow):
         top_layout.addWidget(self.aggregation_table_view, 1)
         layout.addWidget(top_box, 3)
 
-        bottom_box = QGroupBox("Resultados da Sessão (Historico)")
+        bottom_box = QGroupBox("Resultados da Sessão (Histórico)")
         bottom_layout = QVBoxLayout(bottom_box)
         self.results_table_view = QTableView()
         self.results_table_view.setModel(self.results_table_model)
@@ -399,7 +401,6 @@ class MainWindow(QMainWindow):
         tab = QWidget()
         layout = QVBoxLayout(tab)
 
-        # --- Linha superior: seletor de SQL + botões ---
         top_bar = QHBoxLayout()
         top_bar.addWidget(QLabel("SQL:"))
         self.sql_combo = QComboBox()
@@ -412,15 +413,12 @@ class MainWindow(QMainWindow):
         top_bar.addWidget(self.btn_sql_export)
         layout.addLayout(top_bar)
 
-        # --- Splitter: SQL + parâmetros (esquerda) | resultados (direita) ---
         splitter = QSplitter(Qt.Vertical)
 
-        # Parte superior: SQL + parâmetros
         upper_widget = QWidget()
         upper_layout = QHBoxLayout(upper_widget)
         upper_layout.setContentsMargins(0, 0, 0, 0)
 
-        # Visualizador SQL
         sql_group = QGroupBox("Texto SQL")
         sql_group_layout = QVBoxLayout(sql_group)
         self.sql_text_view = QPlainTextEdit()
@@ -434,7 +432,6 @@ class MainWindow(QMainWindow):
         sql_group_layout.addWidget(self.sql_text_view)
         upper_layout.addWidget(sql_group, 3)
 
-        # Painel de parâmetros
         param_group = QGroupBox("Parâmetros")
         param_outer_layout = QVBoxLayout(param_group)
         scroll = QScrollArea()
@@ -448,12 +445,10 @@ class MainWindow(QMainWindow):
 
         splitter.addWidget(upper_widget)
 
-        # Parte inferior: resultados
         result_widget = QWidget()
         result_layout = QVBoxLayout(result_widget)
         result_layout.setContentsMargins(0, 0, 0, 0)
 
-        # Status
         self.sql_status_label = QLabel("Selecione um SQL e clique em Executar.")
         self.sql_status_label.setStyleSheet(
             "QLabel { padding: 4px 8px; background: #f0f4ff; border-radius: 4px; "
@@ -461,7 +456,6 @@ class MainWindow(QMainWindow):
         )
         result_layout.addWidget(self.sql_status_label)
 
-        # Filtro rápido nos resultados
         sql_filter_bar = QHBoxLayout()
         self.sql_result_search = QLineEdit()
         self.sql_result_search.setPlaceholderText("Buscar nos resultados...")
@@ -474,7 +468,6 @@ class MainWindow(QMainWindow):
         sql_filter_bar.addWidget(self.btn_sql_next)
         result_layout.addLayout(sql_filter_bar)
 
-        # Tabela de resultados
         self.sql_result_table = QTableView()
         self.sql_result_table.setModel(self.sql_result_model)
         self.sql_result_table.setSelectionBehavior(QAbstractItemView.SelectRows)
@@ -500,12 +493,20 @@ class MainWindow(QMainWindow):
         tab = QWidget()
         layout = QVBoxLayout(tab)
 
+        info = QLabel(
+            "Esta aba exibe a tabela fatores_conversao do fluxo oficial. "
+            "Você pode exportar a base atual e importar uma planilha de revisões manuais "
+            "para gerar fatores_conversao_manuais_<cnpj>.parquet."
+        )
+        info.setWordWrap(True)
+        layout.addWidget(info)
+
         toolbar = QHBoxLayout()
-        self.btn_refresh_conversao = QPushButton("Recarregar")
+        self.btn_refresh_conversao = QPushButton("Recarregar fatores")
         self.btn_refresh_conversao.setIcon(QApplication.style().standardIcon(QApplication.style().StandardPixmap.SP_BrowserReload))
-        self.btn_export_conversao = QPushButton("Exportar Excel")
-        self.btn_import_conversao = QPushButton("Importar Excel")
-        
+        self.btn_export_conversao = QPushButton("Exportar revisão Excel")
+        self.btn_import_conversao = QPushButton("Importar revisão Excel")
+
         toolbar.addWidget(self.btn_refresh_conversao)
         toolbar.addStretch()
         toolbar.addWidget(self.btn_export_conversao)
@@ -559,7 +560,6 @@ class MainWindow(QMainWindow):
                    self.aqf_norm, self.aqf_desc, self.aqf_ncm, self.aqf_cest]:
             qf.returnPressed.connect(self.apply_quick_filters)
 
-        # --- Consulta SQL tab ---
         self.sql_combo.currentIndexChanged.connect(self._on_sql_selected)
         self.btn_sql_execute.clicked.connect(self._execute_sql_query)
         self.btn_sql_export.clicked.connect(self._export_sql_results)
@@ -567,7 +567,6 @@ class MainWindow(QMainWindow):
         self.btn_sql_prev.clicked.connect(self._sql_prev_page)
         self.btn_sql_next.clicked.connect(self._sql_next_page)
 
-        # --- Conversão tab ---
         self.btn_refresh_conversao.clicked.connect(self.atualizar_aba_conversao)
         self.btn_export_conversao.clicked.connect(self.exportar_conversao_excel)
         self.btn_import_conversao.clicked.connect(self.importar_conversao_excel)
@@ -597,18 +596,16 @@ class MainWindow(QMainWindow):
             self.show_error("CNPJ inválido", str(exc))
             return
 
-        # 1. Selecionar Consultas SQL
         consultas_disp = self.servico_pipeline_funcoes.servico_extracao.listar_consultas()
         if not consultas_disp:
             self.show_error("Sem consultas", "Nenhum arquivo .sql encontrado em c:\\funcoes\\consultas_fonte")
             return
-            
+
         dlg_sql = DialogoSelecaoConsultas(consultas_disp, self)
         if not dlg_sql.exec():
             return
         sql_selecionados = dlg_sql.consultas_selecionadas()
 
-        # 2. Selecionar Tabelas
         tabelas_disp = self.servico_pipeline_funcoes.servico_tabelas.listar_tabelas()
         dlg_tab = DialogoSelecaoTabelas(tabelas_disp, self)
         if not dlg_tab.exec():
@@ -619,15 +616,15 @@ class MainWindow(QMainWindow):
             return
 
         self.btn_run_pipeline.setEnabled(False)
-        self.status.showMessage(f"Executando pipeline para {cnpj}...")
-        
+        self.status.showMessage(f"Executando pipeline oficial para {cnpj}...")
+
         data_limite = self.date_input.date().toString("dd/MM/yyyy")
         self.pipeline_worker = PipelineWorker(
-            self.servico_pipeline_funcoes, 
-            cnpj, 
-            sql_selecionados, 
-            tabelas_selecionadas, 
-            data_limite
+            self.servico_pipeline_funcoes,
+            cnpj,
+            sql_selecionados,
+            tabelas_selecionadas,
+            data_limite,
         )
         self.pipeline_worker.finished_ok.connect(self.on_pipeline_finished)
         self.pipeline_worker.failed.connect(self.on_pipeline_failed)
@@ -637,21 +634,33 @@ class MainWindow(QMainWindow):
     def on_pipeline_finished(self, result: ResultadoPipeline) -> None:
         self.btn_run_pipeline.setEnabled(True)
         self.registry_service.upsert(result.cnpj, ran_now=True)
-        self.status.showMessage(f"Pipeline concluído para {result.cnpj}.")
+        self.status.showMessage(f"Pipeline oficial concluído para {result.cnpj}.")
         self.refresh_cnpjs()
         matches = self.cnpj_list.findItems(result.cnpj, Qt.MatchExactly)
         if matches:
             self.cnpj_list.setCurrentItem(matches[0])
             self.refresh_file_tree(result.cnpj)
             self.atualizar_aba_conversao()
-            
+
+        tabelas_fluxo = [
+            item for item in result.arquivos_gerados
+            if item in {"produtos_unidades", "produtos", "produtos_agrupados", "produtos_final", "fatores_conversao"}
+        ]
+        if not tabelas_fluxo:
+            tabelas_fluxo = ["produtos_unidades", "produtos", "produtos_agrupados", "produtos_final", "fatores_conversao"]
+
         msg = "\n".join(result.mensagens[-10:]) if result.mensagens else "Processado com sucesso."
-        self.show_info("Pipeline concluído", f"CNPJ {result.cnpj} processado.\n\nÚltimas mensagens:\n{msg}")
+        self.show_info(
+            "Pipeline oficial concluído",
+            f"CNPJ {result.cnpj} processado.\n\n"
+            f"Fluxo de produtos: {', '.join(tabelas_fluxo)}\n\n"
+            f"Últimas mensagens:\n{msg}",
+        )
 
     def on_pipeline_failed(self, message: str) -> None:
         self.btn_run_pipeline.setEnabled(True)
-        self.status.showMessage("Falha na execução do pipeline.")
-        self.show_error("Falha ao consultar o banco", message)
+        self.status.showMessage("Falha na execução do pipeline oficial.")
+        self.show_error("Falha no pipeline oficial", message)
 
     def on_cnpj_selected(self) -> None:
         item = self.cnpj_list.currentItem()
@@ -666,38 +675,36 @@ class MainWindow(QMainWindow):
 
     def refresh_file_tree(self, cnpj: str) -> None:
         self.file_tree.clear()
-        
+
         root_path = self.parquet_service.cnpj_dir(cnpj)
-        
+
         cat_brutas = QTreeWidgetItem(["Tabelas brutas (SQL)", str(root_path / "arquivos_parquet")])
         cat_analises = QTreeWidgetItem(["Análises de Produtos", str(root_path / "analises" / "produtos")])
         cat_outros = QTreeWidgetItem(["Outros Parquets", str(root_path)])
-        
+
         self.file_tree.addTopLevelItem(cat_brutas)
         self.file_tree.addTopLevelItem(cat_analises)
         self.file_tree.addTopLevelItem(cat_outros)
 
         first_leaf: QTreeWidgetItem | None = None
-        
+
         for path in self.parquet_service.list_parquet_files(cnpj):
-            # Identificar categoria
             if "arquivos_parquet" in str(path.parent):
                 parent = cat_brutas
             elif "analises" in str(path.parent) or "produtos" in str(path.parent):
                 parent = cat_analises
             else:
                 parent = cat_outros
-                
+
             item = QTreeWidgetItem([path.name, str(path.parent)])
             item.setData(0, Qt.UserRole, str(path))
             parent.addChild(item)
             if first_leaf is None:
                 first_leaf = item
-                
+
         cat_brutas.setExpanded(True)
         cat_analises.setExpanded(True)
-        
-        # Limpar categorias vazias
+
         for cat in [cat_brutas, cat_analises, cat_outros]:
             if cat.childCount() == 0:
                 self.file_tree.takeTopLevelItem(self.file_tree.indexOfTopLevelItem(cat))
@@ -923,7 +930,7 @@ class MainWindow(QMainWindow):
         self.state.current_file = target
         self.state.current_page = 1
         self.state.filters = []
-        self.tabs.setCurrentIndex(2) # Switch to Agregação tab (0-indexed: Consulta, SQL, Agregação, Logs)
+        self.tabs.setCurrentIndex(2)
 
     def execute_aggregation(self) -> None:
         if not self.state.current_cnpj:
@@ -932,8 +939,7 @@ class MainWindow(QMainWindow):
 
         rows_top = self.aggregation_table_model.get_checked_rows()
         rows_bottom = self.results_table_model.get_checked_rows()
-        
-        # Merge and de-duplicate
+
         combined = []
         seen = set()
         for r in (rows_top + rows_bottom):
@@ -951,34 +957,32 @@ class MainWindow(QMainWindow):
                 cnpj=self.state.current_cnpj,
                 linhas_selecionadas=combined,
             )
-            # Update the tables to reflect the changes
             self.atualizar_tabelas_agregacao()
             self.recarregar_historico_agregacao(self.state.current_cnpj)
-            
+
             self.show_info(
                 "Agregação concluída",
-                f"As {len(combined)} descrições foram unificadas em:\n'{result.linha_agregada['descricao']}'"
+                f"As {len(combined)} descrições foram unificadas em:\n'{result.linha_agregada['descricao']}'",
             )
         except Exception as e:
             import traceback
             traceback.print_exc()
             self.show_error("Erro na agregação", f"Ocorreu um erro ao agregar: {e}")
-            
-            # Clear checks and reload top table
+
             self.aggregation_table_model.clear_checked()
             self.results_table_model.clear_checked()
             self.open_editable_aggregation_table()
 
     def apply_quick_filters(self) -> None:
         idx = self.tabs.currentIndex()
-        if idx == 0: # Consulta
+        if idx == 0:
             fields = {
                 "descricao_normalizada": self.qf_norm.text().strip(),
                 "descricao": self.qf_desc.text().strip(),
                 "ncm_padrao": self.qf_ncm.text().strip(),
                 "cest_padrao": self.qf_cest.text().strip(),
             }
-        elif idx == 2: # Agregação (Index 2 is "Agregação", Index 1 is "SQL")
+        elif idx == 2:
             fields = {
                 "descricao_normalizada": self.aqf_norm.text().strip(),
                 "descricao": self.aqf_desc.text().strip(),
@@ -988,17 +992,13 @@ class MainWindow(QMainWindow):
         else:
             return
 
-        # Keep non-quick filters if any, but replace quick filter columns
         quick_cols = set(fields.keys())
         new_filters = [f for f in (self.state.filters or []) if f.column not in quick_cols]
-        
+
         for col, val in fields.items():
             if val:
-                # Need to be flexible with column names as they might differ across files
-                # We'll use the one present in the schema
                 actual_col = col
                 if self.state.all_columns:
-                    # Match case-insensitive if needed, or handle variations like NCM_padrao
                     alternatives = {
                         "ncm_padrao": ["ncm_padrao", "NCM_padrao", "lista_ncm"],
                         "cest_padrao": ["cest_padrao", "CEST_padrao", "lista_cest"],
@@ -1011,7 +1011,6 @@ class MainWindow(QMainWindow):
                                 actual_col = alt
                                 break
                     elif col not in self.state.all_columns:
-                        # try case-insensitive and accent-insensitive match
                         target_clean = remove_accents(col).lower()
                         for c in self.state.all_columns:
                             if remove_accents(c).lower() == target_clean:
@@ -1019,13 +1018,12 @@ class MainWindow(QMainWindow):
                                 break
 
                 new_filters.append(FilterCondition(column=actual_col, operator="contém", value=val))
-        
+
         self.state.filters = new_filters
         self.state.current_page = 1
-        
-        self.reload_table(update_main_view=(idx==0))
+
+        self.reload_table(update_main_view=(idx == 0))
         if idx == 2:
-            # Update aggregation table with the filtered results
             self.aggregation_table_model.set_dataframe(self.current_page_df_all)
             self.aggregation_table_view.resizeColumnsToContents()
 
@@ -1045,13 +1043,13 @@ class MainWindow(QMainWindow):
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(target)))
 
     def atualizar_aba_conversao(self) -> None:
-        """Carrega os fatores de conversão do CNPJ atual."""
+        """Carrega os fatores_conversao do CNPJ atual."""
         cnpj = self.state.current_cnpj
         if not cnpj:
             return
 
         pasta_produtos = CNPJ_ROOT / cnpj / "analises" / "produtos"
-        arq_conversao = pasta_produtos / f"fator_conversao_{cnpj}.parquet"
+        arq_conversao = pasta_produtos / f"fatores_conversao_{cnpj}.parquet"
 
         if not arq_conversao.exists():
             self.conversion_model.set_dataframe(pl.DataFrame())
@@ -1062,27 +1060,32 @@ class MainWindow(QMainWindow):
             self.conversion_model.set_dataframe(df)
             self.conversion_table.resizeColumnsToContents()
         except Exception as e:
-            QMessageBox.warning(self, "Erro", f"Erro ao carregar fatores de conversão: {e}")
+            QMessageBox.warning(self, "Erro", f"Erro ao carregar fatores_conversao: {e}")
 
     def exportar_conversao_excel(self) -> None:
-        """Exporta os fatores de conversão para Excel para edição."""
+        """Exporta fatores_conversao para revisão manual em Excel."""
         df = self.conversion_model.dataframe
         if df.is_empty():
-            QMessageBox.information(self, "Aviso", "Não há dados para exportar.")
+            QMessageBox.information(self, "Aviso", "Não há fatores_conversao para exportar.")
             return
 
-        path, _ = QFileDialog.getSaveFileName(self, "Salvar Excel", f"fator_conversao_{self.state.current_cnpj}.xlsx", "Excel (*.xlsx)")
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Salvar Excel",
+            f"fatores_conversao_{self.state.current_cnpj}.xlsx",
+            "Excel (*.xlsx)",
+        )
         if not path:
             return
 
         try:
             df.write_excel(path)
-            QMessageBox.information(self, "Sucesso", f"Arquivo salvo com sucesso:\n{path}")
+            QMessageBox.information(self, "Sucesso", f"Planilha de revisão salva com sucesso:\n{path}")
         except Exception as e:
             QMessageBox.critical(self, "Erro", f"Erro ao exportar: {e}")
 
     def importar_conversao_excel(self) -> None:
-        """Importa fatores de conversão do Excel, sobrescrevendo o Parquet."""
+        """Importa revisões manuais para fatores_conversao_manuais_<cnpj>.parquet."""
         cnpj = self.state.current_cnpj
         if not cnpj:
             return
@@ -1093,42 +1096,49 @@ class MainWindow(QMainWindow):
 
         try:
             df_excel = pl.read_excel(path)
-            # Validação conforme documentação: ano, codigo_produto_ajustado, unid, fator
-            mapping = {
-                "ano": "ano",
-                "codigo_produto_ajustado": "chave_produto",
-                "unid": "unidade",
-                "fator": "fator_de_conversao"
-            }
-            cols_obrigatorias = list(mapping.keys())
-            if not all(c in df_excel.columns for c in cols_obrigatorias):
-                raise ValueError(f"O Excel deve conter as colunas: {cols_obrigatorias}")
+            obrigatorias = {"id_produtos", "unid", "fator"}
+            if not obrigatorias.issubset(set(df_excel.columns)):
+                raise ValueError("O Excel deve conter as colunas: id_produtos, unid, fator. A coluna unid_ref é opcional.")
 
-            pasta_produtos = CNPJ_ROOT / cnpj / "analises" / "produtos"
-            nome_saida = f"fator_conversao_{cnpj}.parquet"
-            
-            # Renomeia para colunas internas e garante tipos
-            df_imp = df_excel.select(cols_obrigatorias).rename({c: mapping[c] for c in cols_obrigatorias})
-            df_imp = df_imp.with_columns([
-                pl.col("fator_de_conversao").cast(pl.Float64)
+            if "unid_ref" not in df_excel.columns:
+                df_excel = df_excel.with_columns(pl.lit(None, dtype=pl.String).alias("unid_ref"))
+
+            df_imp = df_excel.select(["id_produtos", "unid", "unid_ref", "fator"]).with_columns([
+                pl.col("id_produtos").cast(pl.String),
+                pl.col("unid").cast(pl.String),
+                pl.col("unid_ref").cast(pl.String),
+                pl.col("fator").cast(pl.Float64),
             ])
 
+            pasta_produtos = CNPJ_ROOT / cnpj / "analises" / "produtos"
+            nome_saida = f"fatores_conversao_manuais_{cnpj}.parquet"
             df_imp.write_parquet(pasta_produtos / nome_saida)
-            self.atualizar_aba_conversao()
-            QMessageBox.information(self, "Sucesso", "Fatores de conversão importados com sucesso.")
+
+            QMessageBox.information(
+                self,
+                "Sucesso",
+                "Revisões manuais importadas com sucesso.\n"
+                f"Arquivo salvo em: {nome_saida}\n\n"
+                "Reexecute o pipeline oficial ou recalcule os fatores para aplicar as revisões.",
+            )
         except Exception as e:
-            QMessageBox.critical(self, "Erro", f"Erro ao importar: {e}")
+            QMessageBox.critical(self, "Erro", f"Erro ao importar revisões: {e}")
 
     def recalcular_padroes_agregacao(self) -> None:
         """Invoca o serviço para recalcular todos os padrões do CNPJ atual."""
         cnpj = self.state.current_cnpj
-        if not cnpj: return
-        
-        ret = QMessageBox.question(self, "Recalcular Padrões", 
-                                   "Isso irá atualizar NCM, CEST, GTIN, UNID e SEFIN de TODOS os grupos baseando-se na moda dos itens originais.\nProsseguir?",
-                                   QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-        if ret == QMessageBox.StandardButton.No: return
-        
+        if not cnpj:
+            return
+
+        ret = QMessageBox.question(
+            self,
+            "Recalcular Padrões",
+            "Isso irá atualizar NCM, CEST, GTIN, UNID e SEFIN de TODOS os grupos baseando-se na moda dos itens originais.\nProsseguir?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if ret == QMessageBox.StandardButton.No:
+            return
+
         try:
             ok = self.servico_agregacao.recalcular_todos_padroes(cnpj)
             if ok:
@@ -1142,13 +1152,18 @@ class MainWindow(QMainWindow):
     def recalcular_totais_agregacao(self) -> None:
         """Invoca o serviço para recalcular totais de entrada/saída do CNPJ atual."""
         cnpj = self.state.current_cnpj
-        if not cnpj: return
-        
-        ret = QMessageBox.question(self, "Recalcular Totais", 
-                                   "Isso irá calcular os totais de Entrada (C170) e Saída (NFe) para todos os produtos (apenas operações mercantis).\nProsseguir?",
-                                   QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-        if ret == QMessageBox.StandardButton.No: return
-        
+        if not cnpj:
+            return
+
+        ret = QMessageBox.question(
+            self,
+            "Recalcular Totais",
+            "Isso irá calcular os totais de Entrada (C170) e Saída (NFe) para todos os produtos (apenas operações mercantis).\nProsseguir?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if ret == QMessageBox.StandardButton.No:
+            return
+
         self.status.showMessage("Calculando totais de valores...")
         try:
             ok = self.servico_agregacao.recalcular_valores_totais(cnpj)
@@ -1165,29 +1180,25 @@ class MainWindow(QMainWindow):
     def recarregar_historico_agregacao(self, cnpj: str) -> None:
         """Lê o log persistente e preenche o painel de resultados da sessão."""
         historico = self.servico_agregacao.ler_linhas_log(cnpj=cnpj)
-        # O model espera uma lista de dicts (linhas da tabela)
         self.results_table_model.set_dataframe(pl.DataFrame(historico))
         self.results_table_view.resizeColumnsToContents()
 
     def atualizar_tabelas_agregacao(self) -> None:
         """Atualiza os modelos das tabelas de agregação."""
         cnpj = self.state.current_cnpj
-        if not cnpj: return
-        
+        if not cnpj:
+            return
+
         path = self.servico_agregacao.caminho_tabela_editavel(cnpj)
         if path.exists():
             df = pl.read_parquet(path)
             self.aggregation_table_model.set_dataframe(df)
             self.aggregation_table_view.resizeColumnsToContents()
-            
-    # ==================================================================
-    # Consulta SQL — métodos de suporte
-    # ==================================================================
+
     _sql_result_page: int = 1
     _sql_result_page_size: int = DEFAULT_PAGE_SIZE
 
     def _populate_sql_combo(self) -> None:
-        """Carrega a lista de arquivos SQL disponíveis no combo."""
         self._sql_files = self.sql_service.list_sql_files()
         self.sql_combo.blockSignals(True)
         self.sql_combo.clear()
@@ -1197,7 +1208,6 @@ class MainWindow(QMainWindow):
         self.sql_combo.blockSignals(False)
 
     def _on_sql_selected(self, index: int) -> None:
-        """Ao selecionar um SQL no combo: lê, exibe e gera o formulário de parâmetros."""
         if index <= 0:
             self.sql_text_view.setPlainText("")
             self._clear_param_form()
@@ -1217,13 +1227,11 @@ class MainWindow(QMainWindow):
         self._rebuild_param_form(params)
 
     def _clear_param_form(self) -> None:
-        """Remove todos os campos do formulário de parâmetros."""
         while self.sql_param_form.rowCount() > 0:
             self.sql_param_form.removeRow(0)
         self._sql_param_widgets.clear()
 
     def _rebuild_param_form(self, params: list[ParamInfo]) -> None:
-        """Reconstroi o formulário de parâmetros conforme os parâmetros detectados."""
         self._clear_param_form()
         for param in params:
             label = QLabel(f":{param.name}")
@@ -1237,14 +1245,12 @@ class MainWindow(QMainWindow):
                 widget = QLineEdit()
                 if param.placeholder:
                     widget.setPlaceholderText(param.placeholder)
-                # Pré-preencher CNPJ se disponível
                 if "cnpj" in param.name.lower() and self.state.current_cnpj:
                     widget.setText(self.state.current_cnpj)
             self.sql_param_form.addRow(label, widget)
             self._sql_param_widgets[param.name] = widget
 
     def _collect_param_values(self) -> dict[str, str]:
-        """Coleta os valores do formulário de parâmetros."""
         values: dict[str, str] = {}
         for name, widget in self._sql_param_widgets.items():
             if isinstance(widget, QDateEdit):
@@ -1256,7 +1262,6 @@ class MainWindow(QMainWindow):
         return values
 
     def _execute_sql_query(self) -> None:
-        """Executa a consulta SQL em thread separada."""
         if not self._sql_current_sql:
             self.show_error("Nenhum SQL", "Selecione um arquivo SQL antes de executar.")
             return
@@ -1277,7 +1282,6 @@ class MainWindow(QMainWindow):
         self.query_worker.start()
 
     def _on_query_finished(self, df: pl.DataFrame) -> None:
-        """Callback quando a consulta Oracle finaliza com sucesso."""
         self.btn_sql_execute.setEnabled(True)
         self._sql_result_df = df
         self._sql_result_page = 1
@@ -1287,12 +1291,11 @@ class MainWindow(QMainWindow):
         else:
             self._set_sql_status(
                 f"✅ {df.height:,} linhas, {df.width} colunas.",
-                "#dcfce7", "#166534"
+                "#dcfce7", "#166534",
             )
             self._show_sql_result_page()
 
     def _on_query_failed(self, message: str) -> None:
-        """Callback quando a consulta Oracle falha."""
         self.btn_sql_execute.setEnabled(True)
         self._set_sql_status(f"❌ Erro: {message[:200]}", "#fee2e2", "#991b1b")
 
@@ -1304,7 +1307,6 @@ class MainWindow(QMainWindow):
         )
 
     def _show_sql_result_page(self) -> None:
-        """Exibe a página atual dos resultados SQL."""
         df = self._sql_result_df
         if df.height == 0:
             return
@@ -1330,13 +1332,11 @@ class MainWindow(QMainWindow):
             self._show_sql_result_page()
 
     def _filter_sql_results(self) -> None:
-        """Aplica filtro textual global sobre os resultados SQL."""
         search = self.sql_result_search.text().strip().lower()
         if not search or self._sql_result_df.height == 0:
             self._sql_result_page = 1
             self._show_sql_result_page()
             return
-        # Filtrar em todas as colunas (cast para string)
         exprs = [
             pl.col(c).cast(pl.Utf8, strict=False).fill_null("").str.to_lowercase().str.contains(search, literal=True)
             for c in self._sql_result_df.columns
@@ -1351,9 +1351,8 @@ class MainWindow(QMainWindow):
         else:
             self._set_sql_status(
                 f"✅ Busca '{search}': {filtered.height:,} de {self._sql_result_df.height:,} linhas.",
-                "#dcfce7", "#166534"
+                "#dcfce7", "#166534",
             )
-            # Show first page of filtered results
             page_df = filtered.head(self._sql_result_page_size)
             self.sql_result_model.set_dataframe(page_df)
             self.sql_result_table.resizeColumnsToContents()
@@ -1361,7 +1360,6 @@ class MainWindow(QMainWindow):
             self.sql_result_page_label.setText(f"Página 1/{total_pages} | Filtrado: {filtered.height:,}")
 
     def _export_sql_results(self) -> None:
-        """Exporta os resultados da consulta SQL para Excel."""
         if self._sql_result_df.height == 0:
             self.show_error("Sem dados", "Execute uma consulta antes de exportar.")
             return
