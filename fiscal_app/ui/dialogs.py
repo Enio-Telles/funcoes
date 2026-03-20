@@ -6,7 +6,6 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QDialog,
     QDialogButtonBox,
-    QHBoxLayout,
     QLabel,
     QListWidget,
     QListWidgetItem,
@@ -59,7 +58,6 @@ class DialogoSelecaoConsultas(QDialog):
 
         layout.addWidget(QLabel("Marque as consultas SQL que deseja executar:"))
 
-        # Selecionar / Desmarcar todos
         self.chk_todos = QCheckBox("Selecionar todas")
         self.chk_todos.setChecked(True)
         self.chk_todos.stateChanged.connect(self._alternar_todos)
@@ -86,7 +84,6 @@ class DialogoSelecaoConsultas(QDialog):
             self.lista.item(idx).setCheckState(marcado)
 
     def consultas_selecionadas(self) -> list[Path]:
-        """Retorna os caminhos das consultas selecionadas."""
         selecionadas = []
         for idx in range(self.lista.count()):
             item = self.lista.item(idx)
@@ -100,25 +97,41 @@ class DialogoSelecaoTabelas(QDialog):
 
     def __init__(self, tabelas: list[dict[str, str]], parent=None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Selecionar tabelas a gerar")
-        self.resize(520, 380)
+        self.setWindowTitle("Selecionar tabelas do fluxo oficial")
+        self.resize(640, 430)
         self._tabelas = tabelas
 
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel(
+        topo = QLabel(
             "Marque as tabelas que deseja gerar.\n"
+            "Fluxo oficial: produtos_unidades → produtos → produtos_agrupados (+ produtos_final) → fatores_conversao.\n"
             "A ordem de execução respeita as dependências automaticamente."
-        ))
+        )
+        topo.setWordWrap(True)
+        layout.addWidget(topo)
 
-        # Selecionar / Desmarcar todos
-        self.chk_todos = QCheckBox("Selecionar todas")
+        self.chk_todos = QCheckBox("Selecionar todas as etapas visíveis")
         self.chk_todos.setChecked(True)
         self.chk_todos.stateChanged.connect(self._alternar_todos)
         layout.addWidget(self.chk_todos)
 
+        dica = QLabel(
+            "Observação: produtos_final é tabela derivada e normalmente é gerada junto com produtos_agrupados."
+        )
+        dica.setWordWrap(True)
+        dica.setStyleSheet("color: #475569;")
+        layout.addWidget(dica)
+
         self.lista = QListWidget()
+        self.lista.setStyleSheet(
+            "QListWidget::item { padding: 8px 6px; border-bottom: 1px solid #e2e8f0; }"
+        )
         for tabela in tabelas:
-            texto = f"{tabela['nome']}\n   {tabela['descricao']}"
+            nome = tabela["nome"]
+            desc = tabela["descricao"]
+            if tabela.get("id") == "produtos_final":
+                desc = desc + " (gerada automaticamente com produtos_agrupados, quando aplicável)"
+            texto = f"{nome}\n   {desc}"
             item = QListWidgetItem(texto)
             item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
             item.setCheckState(Qt.Checked)
@@ -137,7 +150,6 @@ class DialogoSelecaoTabelas(QDialog):
             self.lista.item(idx).setCheckState(marcado)
 
     def tabelas_selecionadas(self) -> list[str]:
-        """Retorna os IDs das tabelas selecionadas."""
         selecionadas = []
         for idx in range(self.lista.count()):
             item = self.lista.item(idx)
