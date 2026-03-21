@@ -11,6 +11,7 @@ import polars as pl
 from pathlib import Path
 from typing import Any
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.concurrency import run_in_threadpool
 from core.models import (
     AutoSepararResidualRequest,
     DesfazerManualCodigoRequest,
@@ -2585,7 +2586,7 @@ async def desfazer_decisao_codigo(req: DesfazerManualCodigoRequest):
         if df_restante.is_empty():
             mapa_path.unlink(missing_ok=True)
         else:
-            df_restante.write_parquet(str(mapa_path))
+            await run_in_threadpool(df_restante.write_parquet, str(mapa_path))
 
         _reprocessar_produtos(dir_analises, cnpj_limpo)
         return {
