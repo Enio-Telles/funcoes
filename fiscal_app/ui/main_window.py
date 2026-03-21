@@ -4,8 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import polars as pl
-from PySide6.QtCore import QDate, QThread, Qt, Signal, QUrl
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtCore import QDate, Qt
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -82,6 +81,7 @@ from fiscal_app.ui.pipeline_helpers import (
     refresh_cnpjs,
     run_pipeline_for_input,
 )
+from fiscal_app.ui.pipeline_worker import PipelineWorker
 from fiscal_app.ui.sql_helpers import (
     clear_param_form,
     collect_param_values,
@@ -97,6 +97,7 @@ from fiscal_app.ui.sql_helpers import (
     sql_next_page,
     sql_prev_page,
 )
+from fiscal_app.ui.system_helpers import open_cnpj_folder, refresh_logs
 from fiscal_app.ui.traceability_helpers import (
     apply_traceability_filter,
     clear_traceability_filter,
@@ -104,32 +105,6 @@ from fiscal_app.ui.traceability_helpers import (
     open_traceability_file,
     traceability_files,
 )
-
-
-class PipelineWorker(QThread):
-    finished_ok = Signal(object)
-    failed = Signal(str)
-    progress = Signal(str)
-
-    def __init__(self, service: ServicoPipelineCompleto, cnpj: str, consultas: list[Path], tabelas: list[str], data_limite: str | None = None) -> None:
-        super().__init__()
-        self.service = service
-        self.cnpj = cnpj
-        self.consultas = consultas
-        self.tabelas = tabelas
-        self.data_limite = data_limite
-
-    def run(self) -> None:
-        try:
-            result = self.service.executar_completo(self.cnpj, self.consultas, self.tabelas, self.data_limite, progresso=self.progress.emit)
-        except Exception as exc:
-            self.failed.emit(str(exc))
-            return
-        if result.ok:
-            self.finished_ok.emit(result)
-        else:
-            message = "\n".join(result.erros) if result.erros else "Falha no pipeline oficial."
-            self.failed.emit(message or "Falha sem detalhes.")
 
 
 @dataclass
@@ -692,17 +667,10 @@ class MainWindow(QMainWindow):
         apply_quick_filters(self)
 
     def refresh_logs(self) -> None:
-        import json
-        logs = [json.dumps(log) for log in self.servico_agregacao.ler_linhas_log()]
-        self.log_view.setPlainText("\n".join(logs))
+        refresh_logs(self)
 
     def open_cnpj_folder(self) -> None:
-        if not self.state.current_cnpj:
-            self.show_error("CNPJ não selecionado", "Selecione um CNPJ para abrir a pasta."); return
-        target = self.parquet_service.cnpj_dir(self.state.current_cnpj)
-        if not target.exists():
-            self.show_error("Pasta inexistente", f"A pasta {target} ainda não foi criada."); return
-        QDesktopServices.openUrl(QUrl.fromLocalFile(str(target)))
+        open_cnpj_folder(self)
 
     def atualizar_aba_conversao(self) -> None:
         load_conversion_table(self)
