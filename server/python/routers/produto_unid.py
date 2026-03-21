@@ -1,4 +1,5 @@
 import difflib
+import asyncio
 from functools import lru_cache
 import re
 import os
@@ -155,6 +156,7 @@ def _canon_text(value: Any, vazio: str = "(VAZIO)") -> str:
 
 
 import difflib
+import asyncio
 from functools import lru_cache
 
 _STOP_WORDS = {"DE", "DA", "DO", "DAS", "DOS", "E", "COM", "SEM", "PARA", "UN", "PCT", "CX", "KG", "LT", "ML", "GR", "PC", "LATA", "LITRO", "LITROS", "GARRAFA"}
@@ -641,9 +643,12 @@ async def get_produtos_revisao_manual(cnpj: str = Query(...)):
         if not agregados_path.exists():
             return {"success": True, "data": []}
 
-        df = pl.scan_parquet(str(agregados_path)).filter(pl.col("requer_revisao_manual") == True).collect()
+        def _read_parquet_data(path):
+            return pl.scan_parquet(str(path)).filter(pl.col("requer_revisao_manual") == True).collect().to_dicts()
 
-        return {"success": True, "data": df.to_dicts()}
+        data = await asyncio.to_thread(_read_parquet_data, agregados_path)
+
+        return {"success": True, "data": data}
     except Exception as e:
         logger.error("[get_produtos_revisao_manual] Erro: %s\n%s", e, traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
