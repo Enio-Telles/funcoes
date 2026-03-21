@@ -42,6 +42,11 @@ from fiscal_app.services.pipeline_funcoes_service import ResultadoPipeline, Serv
 from fiscal_app.services.query_worker import QueryWorker
 from fiscal_app.services.registry_service import RegistryService
 from fiscal_app.services.sql_service import SqlService, ParamInfo, WIDGET_DATE
+from fiscal_app.ui.conversion_helpers import (
+    export_conversion_excel,
+    import_conversion_excel,
+    load_conversion_table,
+)
 from fiscal_app.ui.dialogs import ColumnSelectorDialog, DialogoSelecaoConsultas, DialogoSelecaoTabelas
 from fiscal_app.ui.traceability_helpers import (
     apply_traceability_filter,
@@ -857,52 +862,13 @@ class MainWindow(QMainWindow):
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(target)))
 
     def atualizar_aba_conversao(self) -> None:
-        cnpj = self.state.current_cnpj
-        if not cnpj: return
-        pasta_produtos = CNPJ_ROOT / cnpj / "analises" / "produtos"
-        arq_conversao = pasta_produtos / f"fatores_conversao_{cnpj}.parquet"
-        if not arq_conversao.exists():
-            self.conversion_model.set_dataframe(pl.DataFrame()); return
-        try:
-            df = pl.read_parquet(arq_conversao)
-            self.conversion_model.set_dataframe(df)
-            self.conversion_table.resizeColumnsToContents()
-        except Exception as e:
-            QMessageBox.warning(self, "Erro", f"Erro ao carregar fatores_conversao: {e}")
+        load_conversion_table(self)
 
     def exportar_conversao_excel(self) -> None:
-        df = self.conversion_model.dataframe
-        if df.is_empty():
-            QMessageBox.information(self, "Aviso", "Não há fatores_conversao para exportar."); return
-        path, _ = QFileDialog.getSaveFileName(self, "Salvar Excel", f"fatores_conversao_{self.state.current_cnpj}.xlsx", "Excel (*.xlsx)")
-        if not path: return
-        try:
-            df.write_excel(path)
-            QMessageBox.information(self, "Sucesso", f"Planilha de revisão salva com sucesso:\n{path}")
-        except Exception as e:
-            QMessageBox.critical(self, "Erro", f"Erro ao exportar: {e}")
+        export_conversion_excel(self)
 
     def importar_conversao_excel(self) -> None:
-        cnpj = self.state.current_cnpj
-        if not cnpj: return
-        path, _ = QFileDialog.getOpenFileName(self, "Abrir Excel", "", "Excel (*.xlsx)")
-        if not path: return
-        try:
-            df_excel = pl.read_excel(path)
-            obrigatorias = {"id_produtos", "unid", "fator"}
-            if not obrigatorias.issubset(set(df_excel.columns)):
-                raise ValueError("O Excel deve conter as colunas: id_produtos, unid, fator. A coluna unid_ref é opcional.")
-            if "unid_ref" not in df_excel.columns:
-                df_excel = df_excel.with_columns(pl.lit(None, dtype=pl.String).alias("unid_ref"))
-            df_imp = df_excel.select(["id_produtos", "unid", "unid_ref", "fator"]).with_columns([
-                pl.col("id_produtos").cast(pl.String), pl.col("unid").cast(pl.String), pl.col("unid_ref").cast(pl.String), pl.col("fator").cast(pl.Float64)
-            ])
-            pasta_produtos = CNPJ_ROOT / cnpj / "analises" / "produtos"
-            nome_saida = f"fatores_conversao_manuais_{cnpj}.parquet"
-            df_imp.write_parquet(pasta_produtos / nome_saida)
-            QMessageBox.information(self, "Sucesso", "Revisões manuais importadas com sucesso.\n" f"Arquivo salvo em: {nome_saida}\n\n" "Reexecute o pipeline oficial ou recalcule os fatores para aplicar as revisões.")
-        except Exception as e:
-            QMessageBox.critical(self, "Erro", f"Erro ao importar revisões: {e}")
+        import_conversion_excel(self)
 
     def recalcular_padroes_agregacao(self) -> None:
         cnpj = self.state.current_cnpj
