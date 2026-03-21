@@ -1,6 +1,7 @@
 """
 Módulo: produtos_unidades.py
 Objetivo: gerar a tabela base de movimentações por unidade.
+Também gera uma trilha de auditoria com origem de cada linha para rastreabilidade.
 """
 
 from __future__ import annotations
@@ -54,6 +55,17 @@ COLUNAS_FINAIS = [
     "compras",
     "vendas",
 ]
+
+COLUNAS_AUDITORIA = [
+    "chave_linha_origem",
+    "descricao_normalizada",
+    *COLUNAS_FINAIS,
+    "fonte",
+    "origem_arquivo",
+    "tipo_movimento",
+]
+
+FONTES_EMITIDAS = {"NFe", "NFCe"}
 
 
 def _sanitizar_cnpj(cnpj: str) -> str:
@@ -126,8 +138,21 @@ def ler_cfop_mercantil() -> pl.DataFrame | None:
     )
 
 
-def _aplicar_schema_padrao(df: pl.DataFrame) -> pl.DataFrame:
-    for col in ["codigo", "descricao", "descr_compl", "tipo_item", "ncm", "cest", "gtin", "unid"]:
+def _garantir_colunas(df: pl.DataFrame) -> pl.DataFrame:
+    colunas_texto = [
+        "codigo",
+        "descricao",
+        "descr_compl",
+        "tipo_item",
+        "ncm",
+        "cest",
+        "gtin",
+        "unid",
+        "fonte",
+        "origem_arquivo",
+        "tipo_movimento",
+    ]
+    for col in colunas_texto:
         if col in df.columns:
             df = df.with_columns(pl.col(col).cast(pl.String))
         else:
@@ -146,7 +171,23 @@ def _expr_saida(coluna_tipo: str) -> pl.Expr:
     return col.str.starts_with("1") | col.str.contains("SAID")
 
 
-def processar_nfe_nfce(path: Path | None, cnpj: str, df_cfop: pl.DataFrame | None) -> pl.DataFrame | None:
+def _expr_gtin(df: pl.DataFrame) -> pl.Expr:
+    if "prod_ceantrib" in df.columns and "prod_cean" in df.columns:
+        return (
+            pl.when(pl.col("prod_ceantrib").is_null() | (pl.col("prod_ceantrib").cast(pl.String).str.strip_chars() == ""))
+            .then(pl.col("prod_cean"))
+            .otherwise(pl.col("prod_ceantrib"))
+            .cast(pl.String)
+            .alias("gtin")
+        )
+    if "prod_ceantrib" in df.columns:
+        return pl.col("prod_ceantrib").cast(pl.String).alias("gtin")
+    if "prod_cean" in df.columns:
+        return pl.col("prod_cean").cast(pl.String).alias("gtin")
+    return pl.lit(None, dtype=pl.String).alias("gtin")
+
+
+def processar_nfe_nfce(path: Path | None, cnpj: str, df_cfop: pl.DataFrame | None, fonte: str) -> pl.DataFrame | None:
     if not path or not path.exists():
         return None
 
@@ -188,27 +229,15 @@ def processar_nfe_nfce(path: Path | None, cnpj: str, df_cfop: pl.DataFrame | Non
             return pl.col(col_name).fill_null(0).cast(pl.Float64)
         return pl.lit(0.0)
 
-    if "prod_ceantrib" in df.columns and "prod_cean" in df.columns:
-        gtin_expr = (
-            pl.when(pl.col("prod_ceantrib").is_null() | (pl.col("prod_ceantrib").cast(pl.String).str.strip_chars() == ""))
-            .then(pl.col("prod_cean"))
-            .otherwise(pl.col("prod_ceantrib"))
-            .cast(pl.String)
-            .alias("gtin")
-        )
-    elif "prod_ceantrib" in df.columns:
-        gtin_expr = pl.col("prod_ceantrib").cast(pl.String).alias("gtin")
-    elif "prod_cean" in df.columns:
-        gtin_expr = pl.col("prod_cean").cast(pl.String).alias("gtin")
-    else:
-        gtin_expr = pl.lit(None, dtype=pl.String).alias("gtin")
-
     df = df.with_columns([
         (_val("prod_vprod") + _val("prod_vfrete") + _val("prod_vseg") + _val("prod_voutro") - _val("prod_vdesc")).alias("vendas"),
         pl.lit(0.0).alias("compras"),
         pl.lit(None, dtype=pl.String).alias("descr_compl"),
         pl.lit(None, dtype=pl.String).alias("tipo_item"),
-        gtin_expr,
+        _expr_gtin(df),
+        pl.lit(fonte).alias("fonte"),
+        pl.lit(path.name).alias("origem_arquivo"),
+        pl.lit("VENDA").alias("tipo_movimento"),
     ])
 
     renames = {
@@ -222,8 +251,8 @@ def processar_nfe_nfce(path: Path | None, cnpj: str, df_cfop: pl.DataFrame | Non
     if "cest" not in df.columns:
         df = df.with_columns(pl.lit(None, dtype=pl.String).alias("cest"))
 
-    return _aplicar_schema_padrao(df).select(
-        ["codigo", "descricao", "descr_compl", "tipo_item", "ncm", "cest", "gtin", "unid", "compras", "vendas"]
+    return _garantir_colunas(df).select(
+        ["codigo", "descricao", "descr_compl", "tipo_item", "ncm", "cest", "gtin", "unid", "compras", "vendas", "fonte", "origem_arquivo", "tipo_movimento"]
     )
 
 
@@ -233,7 +262,6 @@ def processar_c170(path: Path | None, df_cfop: pl.DataFrame | None) -> pl.DataFr
 
     schema = pl.read_parquet(path, n_rows=0).schema
     lf = pl.scan_parquet(path)
-
     if "ind_oper" in schema:
         lf = lf.filter(pl.col("ind_oper").cast(pl.String) == "0")
     if df_cfop is not None and "co_cfop" in schema:
@@ -252,16 +280,20 @@ def processar_c170(path: Path | None, df_cfop: pl.DataFrame | None) -> pl.DataFr
         "cod_barra": "gtin",
     }
     df = df.rename({k: v for k, v in renames.items() if k in df.columns})
-
     valor_col = "vl_item" if "vl_item" in df.columns else "valor_item"
     if valor_col in df.columns:
         df = df.with_columns(pl.col(valor_col).fill_null(0).cast(pl.Float64).alias("compras"))
     else:
         df = df.with_columns(pl.lit(0.0).alias("compras"))
 
-    df = df.with_columns(pl.lit(0.0).alias("vendas"))
-    return _aplicar_schema_padrao(df).select(
-        ["codigo", "descricao", "descr_compl", "tipo_item", "ncm", "cest", "gtin", "unid", "compras", "vendas"]
+    df = df.with_columns([
+        pl.lit(0.0).alias("vendas"),
+        pl.lit("C170").alias("fonte"),
+        pl.lit(path.name).alias("origem_arquivo"),
+        pl.lit("COMPRA").alias("tipo_movimento"),
+    ])
+    return _garantir_colunas(df).select(
+        ["codigo", "descricao", "descr_compl", "tipo_item", "ncm", "cest", "gtin", "unid", "compras", "vendas", "fonte", "origem_arquivo", "tipo_movimento"]
     )
 
 
@@ -291,9 +323,12 @@ def processar_bloco_h(path: Path | None) -> pl.DataFrame | None:
         pl.lit(None, dtype=pl.String).alias("descr_compl"),
         pl.lit(0.0).alias("compras"),
         pl.lit(0.0).alias("vendas"),
+        pl.lit("BLOCO_H").alias("fonte"),
+        pl.lit(path.name).alias("origem_arquivo"),
+        pl.lit("ESTOQUE").alias("tipo_movimento"),
     ])
-    return _aplicar_schema_padrao(df).select(
-        ["codigo", "descricao", "descr_compl", "tipo_item", "ncm", "cest", "gtin", "unid", "compras", "vendas"]
+    return _garantir_colunas(df).select(
+        ["codigo", "descricao", "descr_compl", "tipo_item", "ncm", "cest", "gtin", "unid", "compras", "vendas", "fonte", "origem_arquivo", "tipo_movimento"]
     )
 
 
@@ -399,12 +434,13 @@ def gerar_produtos_unidades(cnpj: str, pasta_cnpj: Path | None = None) -> pl.Dat
     df_cfop = ler_cfop_mercantil()
     fragmentos = []
 
-    for df in [
-        processar_nfe_nfce(_resolver_arquivo(pasta_cnpj, cnpj, "NFe"), cnpj, df_cfop),
-        processar_nfe_nfce(_resolver_arquivo(pasta_cnpj, cnpj, "NFCe"), cnpj, df_cfop),
+    candidatos = [
+        processar_nfe_nfce(_resolver_arquivo(pasta_cnpj, cnpj, "NFe"), cnpj, df_cfop, "NFe"),
+        processar_nfe_nfce(_resolver_arquivo(pasta_cnpj, cnpj, "NFCe"), cnpj, df_cfop, "NFCe"),
         processar_c170(_resolver_arquivo(pasta_cnpj, cnpj, "c170_simplificada") or _resolver_arquivo(pasta_cnpj, cnpj, "c170"), df_cfop),
         processar_bloco_h(_resolver_arquivo(pasta_cnpj, cnpj, "bloco_h")),
-    ]:
+    ]
+    for df in candidatos:
         if df is not None and not df.is_empty():
             fragmentos.append(df)
 
@@ -413,7 +449,7 @@ def gerar_produtos_unidades(cnpj: str, pasta_cnpj: Path | None = None) -> pl.Dat
         return None
 
     df_total = pl.concat(fragmentos, how="diagonal_relaxed")
-    df_total = _aplicar_schema_padrao(df_total)
+    df_total = _garantir_colunas(df_total)
     df_total = df_total.with_columns([
         pl.col("codigo").map_elements(_limpar_codigo, return_dtype=pl.String).alias("codigo"),
         pl.col("descricao").map_elements(_normalizar_texto, return_dtype=pl.String).alias("descricao"),
@@ -423,23 +459,31 @@ def gerar_produtos_unidades(cnpj: str, pasta_cnpj: Path | None = None) -> pl.Dat
         pl.col("cest").map_elements(_limpar_codigo_pontuado, return_dtype=pl.String).alias("cest"),
         pl.col("gtin").map_elements(_limpar_codigo_pontuado, return_dtype=pl.String).alias("gtin"),
         pl.col("unid").map_elements(_normalizar_texto, return_dtype=pl.String).alias("unid"),
+        pl.col("descricao").map_elements(_normalizar_texto, return_dtype=pl.String).alias("descricao_normalizada"),
     ])
 
     df_total = adicionar_co_sefin(df_total)
+    df_total = df_total.with_columns(
+        (pl.lit("origem_") + pl.int_range(1, pl.len() + 1).cast(pl.String)).alias("chave_linha_origem")
+    )
 
-    for col in COLUNAS_FINAIS:
+    for col in COLUNAS_AUDITORIA:
         if col not in df_total.columns:
             if col in {"compras", "vendas"}:
                 df_total = df_total.with_columns(pl.lit(0.0).alias(col))
             else:
                 df_total = df_total.with_columns(pl.lit(None, dtype=pl.String).alias(col))
 
-    df_total = df_total.select(COLUNAS_FINAIS)
     pasta_saida = pasta_cnpj / "analises" / "produtos"
-    salvar_para_parquet(df_total, pasta_saida, f"produtos_unidades_{cnpj}.parquet")
+    df_auditoria = df_total.select(COLUNAS_AUDITORIA)
+    salvar_para_parquet(df_auditoria, pasta_saida, f"produtos_unidades_origens_{cnpj}.parquet")
 
-    rprint(f"[green]produtos_unidades gerado com {len(df_total)} registros.[/green]")
-    return df_total
+    df_saida = df_total.select(COLUNAS_FINAIS)
+    salvar_para_parquet(df_saida, pasta_saida, f"produtos_unidades_{cnpj}.parquet")
+
+    rprint(f"[green]produtos_unidades gerado com {len(df_saida)} registros.[/green]")
+    rprint(f"[green]Auditoria de origem gerada com {len(df_auditoria)} registros.[/green]")
+    return df_saida
 
 
 if __name__ == "__main__":
