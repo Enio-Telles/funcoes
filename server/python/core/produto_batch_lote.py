@@ -362,16 +362,10 @@ def _build_component_summaries(
     }
 
 
-def construir_preview_unificacao_lote(
-    df_agregados: pl.DataFrame,
-    df_pairs: pl.DataFrame,
-    rule_ids: list[str],
-    source_method: str,
-    require_all_pairs_compatible: bool = True,
-    max_component_size: int = 12,
-) -> dict[str, Any]:
-    rows = [normalize_final_group_row(row) for row in df_agregados.to_dicts()]
-    row_map = {row["chave_produto"]: row for row in rows if row["chave_produto"] and row["descricao"]}
+
+def _evaluate_all_pairs(
+    df_pairs, row_map, rule_ids
+) -> tuple[dict[tuple[str, str], dict[str, Any]], dict[str, list[tuple[str, str]]]]:
     pair_lookup: dict[tuple[str, str], dict[str, Any]] = {}
     edges_by_rule: dict[str, list[tuple[str, str]]] = {rule_id: [] for rule_id in rule_ids}
 
@@ -391,67 +385,63 @@ def construir_preview_unificacao_lote(
             if evaluation.get("eligible"):
                 edges_by_rule[rule_id].append(key)
 
-    proposals: list[dict[str, Any]] = []
-    total_components = 0
-    claimed_components: set[tuple[str, ...]] = set()
+    return pair_lookup, edges_by_rule
 
-    for rule_id in [rule for rule in RULE_PRIORITY if rule in rule_ids]:
-        adjacency: dict[str, set[str]] = defaultdict(set)
+
+def _find_connected_components(adjacency: dict[str, set[str]], max_component_size: int) -> list[list[str]]:
+    visited: set[str] = set()
+    components: list[list[str]] = []
+
+    for start in sorted(adjacency):
+        if start in visited:
+            continue
+        stack = [start]
+        component_keys: list[str] = []
+        while stack:
+            current = stack.pop()
+            if current in visited:
+                continue
+            visited.add(current)
+            component_keys.append(current)
+            for neighbor in sorted(adjacency.get(current, set())):
+                if neighbor not in visited:
+                    stack.append(neighbor)
+
+        component_keys = sorted(set(component_keys))
+        if 2 <= len(component_keys) <= max(2, int(max_component_size)):
+            components.append(component_keys)
+
+    return components
+
+
+def _validate_and_build_contexts(
+    component_keys: list[str],
+    rule_id: str,
+    row_map: dict[str, Any],
+    pair_lookup: dict[tuple[str, str], dict[str, Any]],
+    edges_by_rule: dict[str, list[tuple[str, str]]],
+    require_all_pairs_compatible: bool,
+) -> tuple[bool, list[dict[str, Any]]]:
+    edge_contexts: list[dict[str, Any]] = []
+    if require_all_pairs_compatible:
+        for left_key, right_key in combinations(component_keys, 2):
+            key = _pair_key(left_key, right_key)
+            left = row_map[left_key]
+            right = row_map[right_key]
+            pair_context = pair_lookup.get(key) or _build_pair_context(left, right, None)
+            evaluation = evaluate_batch_rule(rule_id, left, right, pair_context)
+            if not evaluation.get("eligible"):
+                return False, []
+            edge_contexts.append(pair_context)
+    else:
         for left_key, right_key in edges_by_rule.get(rule_id, []):
-            adjacency[left_key].add(right_key)
-            adjacency[right_key].add(left_key)
+            if left_key in component_keys and right_key in component_keys:
+                edge_contexts.append(pair_lookup[_pair_key(left_key, right_key)])
 
-        visited: set[str] = set()
-        proposal_index = 1
-        for start in sorted(adjacency):
-            if start in visited:
-                continue
-            stack = [start]
-            component_keys: list[str] = []
-            while stack:
-                current = stack.pop()
-                if current in visited:
-                    continue
-                visited.add(current)
-                component_keys.append(current)
-                for neighbor in sorted(adjacency.get(current, set())):
-                    if neighbor not in visited:
-                        stack.append(neighbor)
-            component_keys = sorted(set(component_keys))
-            if len(component_keys) < 2 or len(component_keys) > max(2, int(max_component_size)):
-                continue
+    return True, edge_contexts
 
-            component_signature = tuple(component_keys)
-            if component_signature in claimed_components:
-                continue
 
-            edge_contexts: list[dict[str, Any]] = []
-            valid_component = True
-            if require_all_pairs_compatible:
-                for left_key, right_key in combinations(component_keys, 2):
-                    key = _pair_key(left_key, right_key)
-                    left = row_map[left_key]
-                    right = row_map[right_key]
-                    pair_context = pair_lookup.get(key) or _build_pair_context(left, right, None)
-                    evaluation = evaluate_batch_rule(rule_id, left, right, pair_context)
-                    if not evaluation.get("eligible"):
-                        valid_component = False
-                        break
-                    edge_contexts.append(pair_context)
-            else:
-                for left_key, right_key in edges_by_rule.get(rule_id, []):
-                    if left_key in component_keys and right_key in component_keys:
-                        edge_contexts.append(pair_lookup[_pair_key(left_key, right_key)])
-
-            if not valid_component or not edge_contexts:
-                continue
-
-            component_rows = [row_map[key] for key in component_keys]
-            proposals.append(_build_component_summaries(component_rows, edge_contexts, rule_id, proposal_index, source_method))
-            proposal_index += 1
-            total_components += 1
-            claimed_components.add(component_signature)
-
+def _generate_rule_summaries(proposals: list[dict[str, Any]], rule_ids: list[str]) -> list[dict[str, Any]]:
     summary_by_rule: list[dict[str, Any]] = []
     for rule_id in [rule for rule in RULE_PRIORITY if rule in rule_ids]:
         rule_proposals = [item for item in proposals if item["rule_id"] == rule_id]
@@ -464,6 +454,54 @@ def construir_preview_unificacao_lote(
                 "group_count": len(grouped_keys),
             }
         )
+    return summary_by_rule
+
+
+def construir_preview_unificacao_lote(
+    df_agregados: pl.DataFrame,
+    df_pairs: pl.DataFrame,
+    rule_ids: list[str],
+    source_method: str,
+    require_all_pairs_compatible: bool = True,
+    max_component_size: int = 12,
+) -> dict[str, Any]:
+    rows = [normalize_final_group_row(row) for row in df_agregados.to_dicts()]
+    row_map = {row["chave_produto"]: row for row in rows if row["chave_produto"] and row["descricao"]}
+
+    pair_lookup, edges_by_rule = _evaluate_all_pairs(df_pairs, row_map, rule_ids)
+
+    proposals: list[dict[str, Any]] = []
+    total_components = 0
+    claimed_components: set[tuple[str, ...]] = set()
+
+    for rule_id in [rule for rule in RULE_PRIORITY if rule in rule_ids]:
+        adjacency: dict[str, set[str]] = defaultdict(set)
+        for left_key, right_key in edges_by_rule.get(rule_id, []):
+            adjacency[left_key].add(right_key)
+            adjacency[right_key].add(left_key)
+
+        components = _find_connected_components(adjacency, max_component_size)
+
+        proposal_index = 1
+        for component_keys in components:
+            component_signature = tuple(component_keys)
+            if component_signature in claimed_components:
+                continue
+
+            valid_component, edge_contexts = _validate_and_build_contexts(
+                component_keys, rule_id, row_map, pair_lookup, edges_by_rule, require_all_pairs_compatible
+            )
+
+            if not valid_component or not edge_contexts:
+                continue
+
+            component_rows = [row_map[key] for key in component_keys]
+            proposals.append(_build_component_summaries(component_rows, edge_contexts, rule_id, proposal_index, source_method))
+            proposal_index += 1
+            total_components += 1
+            claimed_components.add(component_signature)
+
+    summary_by_rule = _generate_rule_summaries(proposals, rule_ids)
 
     return {
         "generated_at_utc": datetime.now(UTC).isoformat(),
