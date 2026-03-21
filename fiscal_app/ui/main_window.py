@@ -41,13 +41,24 @@ from fiscal_app.services.parquet_service import FilterCondition, ParquetService
 from fiscal_app.services.pipeline_funcoes_service import ResultadoPipeline, ServicoPipelineCompleto
 from fiscal_app.services.query_worker import QueryWorker
 from fiscal_app.services.registry_service import RegistryService
-from fiscal_app.services.sql_service import SqlService, ParamInfo, WIDGET_DATE
-from fiscal_app.ui.conversion_helpers import (
-    export_conversion_excel,
-    import_conversion_excel,
-    load_conversion_table,
-)
+from fiscal_app.services.sql_service import SqlService
+from fiscal_app.ui.conversion_helpers import export_conversion_excel, import_conversion_excel, load_conversion_table
 from fiscal_app.ui.dialogs import ColumnSelectorDialog, DialogoSelecaoConsultas, DialogoSelecaoTabelas
+from fiscal_app.ui.sql_helpers import (
+    clear_param_form,
+    collect_param_values,
+    execute_sql_query,
+    export_sql_results,
+    filter_sql_results,
+    on_query_failed,
+    on_query_finished,
+    on_sql_selected,
+    populate_sql_combo,
+    rebuild_param_form,
+    show_sql_result_page,
+    sql_next_page,
+    sql_prev_page,
+)
 from fiscal_app.ui.traceability_helpers import (
     apply_traceability_filter,
     clear_traceability_filter,
@@ -950,117 +961,40 @@ class MainWindow(QMainWindow):
     _sql_result_page_size: int = DEFAULT_PAGE_SIZE
 
     def _populate_sql_combo(self) -> None:
-        self._sql_files = self.sql_service.list_sql_files()
-        self.sql_combo.blockSignals(True); self.sql_combo.clear(); self.sql_combo.addItem("— Selecione uma consulta —")
-        for info in self._sql_files:
-            self.sql_combo.addItem(f"{info.display_name}  [{info.source_dir}]", str(info.path))
-        self.sql_combo.blockSignals(False)
+        populate_sql_combo(self)
 
     def _on_sql_selected(self, index: int) -> None:
-        if index <= 0:
-            self.sql_text_view.setPlainText(""); self._clear_param_form(); self._sql_current_sql = ""; return
-        path_str = self.sql_combo.itemData(index)
-        if not path_str: return
-        try:
-            sql_text = self.sql_service.read_sql(Path(path_str))
-        except Exception as exc:
-            self.show_error("Erro ao ler SQL", str(exc)); return
-        self._sql_current_sql = sql_text; self.sql_text_view.setPlainText(sql_text)
-        params = self.sql_service.extract_params(sql_text); self._rebuild_param_form(params)
+        on_sql_selected(self, index)
 
     def _clear_param_form(self) -> None:
-        while self.sql_param_form.rowCount() > 0: self.sql_param_form.removeRow(0)
-        self._sql_param_widgets.clear()
+        clear_param_form(self)
 
-    def _rebuild_param_form(self, params: list[ParamInfo]) -> None:
-        self._clear_param_form()
-        for param in params:
-            label = QLabel(f":{param.name}"); label.setStyleSheet("font-weight: bold; color: #1e40af;")
-            if param.widget_type == WIDGET_DATE:
-                widget = QDateEdit(); widget.setCalendarPopup(True); widget.setDate(QDate.currentDate()); widget.setDisplayFormat("dd/MM/yyyy")
-            else:
-                widget = QLineEdit()
-                if param.placeholder: widget.setPlaceholderText(param.placeholder)
-                if "cnpj" in param.name.lower() and self.state.current_cnpj: widget.setText(self.state.current_cnpj)
-            self.sql_param_form.addRow(label, widget); self._sql_param_widgets[param.name] = widget
+    def _rebuild_param_form(self, params) -> None:
+        rebuild_param_form(self, params)
 
     def _collect_param_values(self) -> dict[str, str]:
-        values: dict[str, str] = {}
-        for name, widget in self._sql_param_widgets.items():
-            values[name] = widget.date().toString("dd/MM/yyyy") if isinstance(widget, QDateEdit) else widget.text().strip() if isinstance(widget, QLineEdit) else ""
-        return values
+        return collect_param_values(self)
 
     def _execute_sql_query(self) -> None:
-        if not self._sql_current_sql:
-            self.show_error("Nenhum SQL", "Selecione um arquivo SQL antes de executar."); return
-        if self.query_worker is not None and self.query_worker.isRunning():
-            self.show_error("Aguarde", "Uma consulta já está em execução."); return
-        values = self._collect_param_values(); binds = self.sql_service.build_binds(self._sql_current_sql, values)
-        self.btn_sql_execute.setEnabled(False); self._set_sql_status("⏳ Conectando ao Oracle...", "#fef9c3", "#92400e")
-        self.query_worker = QueryWorker(self._sql_current_sql, binds)
-        self.query_worker.progress.connect(lambda msg: self._set_sql_status(f"⏳ {msg}", "#fef9c3", "#92400e"))
-        self.query_worker.finished_ok.connect(self._on_query_finished)
-        self.query_worker.failed.connect(self._on_query_failed)
-        self.query_worker.start()
+        execute_sql_query(self)
 
     def _on_query_finished(self, df: pl.DataFrame) -> None:
-        self.btn_sql_execute.setEnabled(True); self._sql_result_df = df; self._sql_result_page = 1
-        if df.height == 0:
-            self._set_sql_status("ℹ️  Consulta retornou 0 resultados.", "#e0e7ff", "#3730a3"); self.sql_result_model.set_dataframe(pl.DataFrame())
-        else:
-            self._set_sql_status(f"✅ {df.height:,} linhas, {df.width} colunas.", "#dcfce7", "#166534"); self._show_sql_result_page()
+        on_query_finished(self, df)
 
     def _on_query_failed(self, message: str) -> None:
-        self.btn_sql_execute.setEnabled(True); self._set_sql_status(f"❌ Erro: {message[:200]}", "#fee2e2", "#991b1b")
-
-    def _set_sql_status(self, text: str, bg: str, fg: str) -> None:
-        self.sql_status_label.setText(text)
-        self.sql_status_label.setStyleSheet(f"QLabel {{ padding: 4px 8px; background: {bg}; border-radius: 4px; border: 1px solid {bg}; color: {fg}; font-weight: bold; }}")
+        on_query_failed(self, message)
 
     def _show_sql_result_page(self) -> None:
-        df = self._sql_result_df
-        if df.height == 0: return
-        total_pages = max(1, ((df.height - 1) // self._sql_result_page_size) + 1)
-        self._sql_result_page = max(1, min(self._sql_result_page, total_pages))
-        offset = (self._sql_result_page - 1) * self._sql_result_page_size
-        page_df = df.slice(offset, self._sql_result_page_size)
-        self.sql_result_model.set_dataframe(page_df); self.sql_result_table.resizeColumnsToContents()
-        self.sql_result_page_label.setText(f"Página {self._sql_result_page}/{total_pages} | Total: {df.height:,}")
+        show_sql_result_page(self)
 
     def _sql_prev_page(self) -> None:
-        if self._sql_result_page > 1:
-            self._sql_result_page -= 1; self._show_sql_result_page()
+        sql_prev_page(self)
 
     def _sql_next_page(self) -> None:
-        total_pages = max(1, ((self._sql_result_df.height - 1) // self._sql_result_page_size) + 1)
-        if self._sql_result_page < total_pages:
-            self._sql_result_page += 1; self._show_sql_result_page()
+        sql_next_page(self)
 
     def _filter_sql_results(self) -> None:
-        search = self.sql_result_search.text().strip().lower()
-        if not search or self._sql_result_df.height == 0:
-            self._sql_result_page = 1; self._show_sql_result_page(); return
-        exprs = [pl.col(c).cast(pl.Utf8, strict=False).fill_null("").str.to_lowercase().str.contains(search, literal=True) for c in self._sql_result_df.columns]
-        combined = exprs[0]
-        for e in exprs[1:]: combined = combined | e
-        filtered = self._sql_result_df.filter(combined)
-        if filtered.height == 0:
-            self._set_sql_status(f"ℹ️  Busca '{search}' não encontrou resultados.", "#e0e7ff", "#3730a3"); self.sql_result_model.set_dataframe(pl.DataFrame())
-        else:
-            self._set_sql_status(f"✅ Busca '{search}': {filtered.height:,} de {self._sql_result_df.height:,} linhas.", "#dcfce7", "#166534")
-            page_df = filtered.head(self._sql_result_page_size)
-            self.sql_result_model.set_dataframe(page_df); self.sql_result_table.resizeColumnsToContents()
-            total_pages = max(1, ((filtered.height - 1) // self._sql_result_page_size) + 1)
-            self.sql_result_page_label.setText(f"Página 1/{total_pages} | Filtrado: {filtered.height:,}")
+        filter_sql_results(self)
 
     def _export_sql_results(self) -> None:
-        if self._sql_result_df.height == 0:
-            self.show_error("Sem dados", "Execute uma consulta antes de exportar."); return
-        target = self._save_dialog("Exportar resultados SQL para Excel", "Excel (*.xlsx)")
-        if not target: return
-        try:
-            sql_name = self.sql_combo.currentText().split("[")[0].strip() or "consulta_sql"
-            self.export_service.export_excel(target, self._sql_result_df, sheet_name=sql_name[:31])
-            self.show_info("Exportação concluída", f"Arquivo gerado em:\n{target}")
-        except Exception as exc:
-            self.show_error("Falha na exportação", str(exc))
+        export_sql_results(self)
