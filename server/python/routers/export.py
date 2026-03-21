@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import re
 import sys
@@ -17,31 +18,32 @@ router = APIRouter(prefix="/api/python/export", tags=["export"])
 _PROJETO_DIR = Path(__file__).resolve().parent.parent.parent.parent
 if str(_PROJETO_DIR) not in sys.path:
     sys.path.insert(0, str(_PROJETO_DIR))
-
 @router.post("/excel")
 async def export_to_excel(request: ExcelExportRequest):
     """Exporta arquivos Parquet para Excel com formatação padrão."""
-    output_path = Path(request.output_dir)
-    output_path.mkdir(parents=True, exist_ok=True)
-    results = []
-    for source in request.source_files:
-        source_path = Path(source)
-        if not source_path.exists():
-            results.append({"file": source, "status": "error", "message": "Arquivo não encontrado"})
-            continue
-        try:
-            df = pl.read_parquet(str(source_path))
-            if df.is_empty():
-                results.append({"file": source, "status": "skipped", "message": "Sem dados"})
+    def _process():
+        output_path = Path(request.output_dir)
+        output_path.mkdir(parents=True, exist_ok=True)
+        results = []
+        for source in request.source_files:
+            source_path = Path(source)
+            if not source_path.exists():
+                results.append({"file": source, "status": "error", "message": "Arquivo não encontrado"})
                 continue
-            excel_path = output_path / (source_path.stem + ".xlsx")
-            import pandas as pd
-            with pd.ExcelWriter(str(excel_path), engine="xlsxwriter") as writer:
-                _write_excel_with_format(df.to_pandas(), writer)
-            results.append({"file": source, "output": str(excel_path), "rows": len(df), "status": "success"})
-        except Exception as e:
-            results.append({"file": source, "status": "error", "message": str(e)})
-    return {"success": True, "results": results}
+            try:
+                df = pl.read_parquet(str(source_path))
+                if df.is_empty():
+                    results.append({"file": source, "status": "skipped", "message": "Sem dados"})
+                    continue
+                excel_path = output_path / (source_path.stem + ".xlsx")
+                import pandas as pd
+                with pd.ExcelWriter(str(excel_path), engine="xlsxwriter") as writer:
+                    _write_excel_with_format(df.to_pandas(), writer)
+                results.append({"file": source, "output": str(excel_path), "rows": len(df), "status": "success"})
+            except Exception as e:
+                results.append({"file": source, "status": "error", "message": str(e)})
+        return {"success": True, "results": results}
+    return await asyncio.to_thread(_process)
 
 
 @router.get("/excel-download")
