@@ -11,7 +11,6 @@ from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
     QDateEdit,
-    QFileDialog,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
@@ -32,7 +31,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from fiscal_app.config import APP_NAME, CNPJ_ROOT, CONSULTAS_ROOT, DEFAULT_PAGE_SIZE
+from fiscal_app.config import APP_NAME, CNPJ_ROOT, DEFAULT_PAGE_SIZE
 from fiscal_app.models.table_model import PolarsTableModel
 from fiscal_app.services.aggregation_service import ServicoAgregacao
 from fiscal_app.services.export_service import ExportService
@@ -43,6 +42,14 @@ from fiscal_app.services.registry_service import RegistryService
 from fiscal_app.services.sql_service import SqlService
 from fiscal_app.ui.conversion_helpers import export_conversion_excel, import_conversion_excel, load_conversion_table
 from fiscal_app.ui.dialogs import ColumnSelectorDialog, DialogoSelecaoConsultas, DialogoSelecaoTabelas
+from fiscal_app.ui.export_helpers import (
+    dataset_for_export,
+    export_docx,
+    export_excel,
+    export_txt_html,
+    filters_text,
+    save_dialog,
+)
 from fiscal_app.ui.file_navigation_helpers import (
     load_current_file,
     on_file_activated,
@@ -704,51 +711,22 @@ class MainWindow(QMainWindow):
             self.state.current_page += 1; self.reload_table()
 
     def _save_dialog(self, title: str, pattern: str) -> Path | None:
-        filename, _ = QFileDialog.getSaveFileName(self, title, str(CONSULTAS_ROOT), pattern)
-        return Path(filename) if filename else None
+        return save_dialog(self, title, pattern)
 
     def _filters_text(self) -> str:
-        return " | ".join(f"{f.column} {f.operator} {f.value}".strip() for f in self.state.filters or [])
+        return filters_text(self)
 
     def _dataset_for_export(self, mode: str) -> pl.DataFrame:
-        if self.state.current_file is None: raise ValueError("Nenhum arquivo selecionado.")
-        if mode == "full": return self.parquet_service.load_dataset(self.state.current_file)
-        if mode == "filtered": return self.parquet_service.load_dataset(self.state.current_file, self.state.filters or [])
-        if mode == "visible": return self.parquet_service.load_dataset(self.state.current_file, self.state.filters or [], self.state.visible_columns or [])
-        raise ValueError(f"Modo de exportação não suportado: {mode}")
+        return dataset_for_export(self, mode)
 
     def export_excel(self, mode: str) -> None:
-        try:
-            df = self._dataset_for_export(mode)
-            target = self._save_dialog("Salvar Excel", "Excel (*.xlsx)")
-            if not target: return
-            self.export_service.export_excel(target, df, sheet_name=self.state.current_file.stem if self.state.current_file else "Dados")
-            self.show_info("Exportação concluída", f"Arquivo gerado em:\n{target}")
-        except Exception as exc:
-            self.show_error("Falha na exportação para Excel", str(exc))
+        export_excel(self, mode)
 
     def export_docx(self) -> None:
-        try:
-            if self.state.current_file is None: raise ValueError("Nenhum arquivo selecionado.")
-            df = self.parquet_service.load_dataset(self.state.current_file, self.state.filters or [], self.state.visible_columns or [])
-            target = self._save_dialog("Salvar relatório Word", "Word (*.docx)")
-            if not target: return
-            self.export_service.export_docx(target, title="Relatório Padronizado de Análise Fiscal", cnpj=self.state.current_cnpj or "", table_name=self.state.current_file.name, df=df, filters_text=self._filters_text(), visible_columns=self.state.visible_columns or [])
-            self.show_info("Relatório gerado", f"Arquivo gerado em:\n{target}")
-        except Exception as exc:
-            self.show_error("Falha na exportação para Word", str(exc))
+        export_docx(self)
 
     def export_txt_html(self) -> None:
-        try:
-            if self.state.current_file is None: raise ValueError("Nenhum arquivo selecionado.")
-            df = self.parquet_service.load_dataset(self.state.current_file, self.state.filters or [], self.state.visible_columns or [])
-            html_report = self.export_service.build_html_report(title="Relatório Padronizado de Análise Fiscal", cnpj=self.state.current_cnpj or "", table_name=self.state.current_file.name, df=df, filters_text=self._filters_text(), visible_columns=self.state.visible_columns or [])
-            target = self._save_dialog("Salvar TXT com HTML", "TXT (*.txt)")
-            if not target: return
-            self.export_service.export_txt_with_html(target, html_report)
-            self.show_info("Relatório HTML/TXT gerado", f"Arquivo gerado em:\n{target}")
-        except Exception as exc:
-            self.show_error("Falha na exportação TXT/HTML", str(exc))
+        export_txt_html(self)
 
     def open_editable_aggregation_table(self) -> None:
         if not self.state.current_cnpj:
