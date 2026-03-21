@@ -2,14 +2,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
 
 import polars as pl
 from PySide6.QtCore import QDate, QThread, Qt, Signal, QUrl
-from PySide6.QtGui import QAction, QDesktopServices
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
+    QComboBox,
     QDateEdit,
     QFileDialog,
     QFormLayout,
@@ -18,18 +18,15 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QListWidget,
-    QListWidgetItem,
     QMainWindow,
     QMessageBox,
     QPushButton,
     QPlainTextEdit,
-    QComboBox,
     QScrollArea,
     QSplitter,
     QStatusBar,
     QTabWidget,
     QTableView,
-    QTextEdit,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -42,11 +39,17 @@ from fiscal_app.services.aggregation_service import ServicoAgregacao
 from fiscal_app.services.export_service import ExportService
 from fiscal_app.services.parquet_service import FilterCondition, ParquetService
 from fiscal_app.services.pipeline_funcoes_service import ResultadoPipeline, ServicoPipelineCompleto
-from fiscal_app.services.pipeline_service import PipelineService
 from fiscal_app.services.query_worker import QueryWorker
 from fiscal_app.services.registry_service import RegistryService
 from fiscal_app.services.sql_service import SqlService, ParamInfo, WIDGET_DATE
 from fiscal_app.ui.dialogs import ColumnSelectorDialog, DialogoSelecaoConsultas, DialogoSelecaoTabelas
+from fiscal_app.ui.traceability_helpers import (
+    apply_traceability_filter,
+    clear_traceability_filter,
+    clear_traceability_state,
+    open_traceability_file,
+    traceability_files,
+)
 from fiscal_app.utils.text import remove_accents
 
 
@@ -96,7 +99,6 @@ class MainWindow(QMainWindow):
 
         self.registry_service = RegistryService()
         self.parquet_service = ParquetService(root=CNPJ_ROOT)
-        self.pipeline_service = PipelineService(output_root=CONSULTAS_ROOT)
         self.servico_pipeline_funcoes = ServicoPipelineCompleto()
         self.export_service = ExportService()
         self.servico_agregacao = ServicoAgregacao()
@@ -946,65 +948,19 @@ class MainWindow(QMainWindow):
             self.aggregation_table_model.set_dataframe(df); self.aggregation_table_view.resizeColumnsToContents()
 
     def _arquivos_rastreabilidade(self) -> dict[str, Path]:
-        cnpj = self.state.current_cnpj or ""
-        pasta = CNPJ_ROOT / cnpj / "analises" / "produtos"
-        return {
-            "origens_brutas": pasta / f"produtos_unidades_origens_{cnpj}.parquet",
-            "mapa_produtos": pasta / f"produtos_origens_{cnpj}.parquet",
-            "rastro_agrupamento": pasta / f"produtos_agrupados_rastro_{cnpj}.parquet",
-            "origens_agrupamento": pasta / f"produtos_final_origens_{cnpj}.parquet",
-            "auditoria_fatores": pasta / f"fatores_conversao_auditoria_{cnpj}.parquet",
-            "precos_fatores": pasta / f"fatores_conversao_precos_{cnpj}.parquet",
-        }
+        return traceability_files(self.state.current_cnpj)
 
     def limpar_rastreabilidade(self) -> None:
-        self._trace_df = pl.DataFrame()
-        self.trace_model.set_dataframe(pl.DataFrame())
-        self.trace_status_label.setText("Nenhum arquivo de rastreabilidade carregado.")
-        self.trace_filter_id_agrupado.clear(); self.trace_filter_chave_produto.clear()
+        clear_traceability_state(self)
 
     def _abrir_arquivo_rastreabilidade(self, path: Path, titulo: str) -> None:
-        if not self.state.current_cnpj:
-            self.show_error("CNPJ não selecionado", "Selecione um CNPJ para abrir a rastreabilidade."); return
-        if not path.exists():
-            self.show_error("Arquivo não encontrado", f"Arquivo de rastreabilidade ausente:\n{path.name}"); return
-        try:
-            df = pl.read_parquet(path)
-            self._trace_df = df
-            self.trace_model.set_dataframe(df)
-            self.trace_table.resizeColumnsToContents()
-            self.trace_status_label.setText(f"{titulo}: {path.name} | {df.height:,} linhas")
-            self.tabs.setCurrentWidget(self.trace_tab)
-        except Exception as exc:
-            self.show_error("Erro ao abrir rastreabilidade", str(exc))
-
-    def _filtrar_trace_df(self, df: pl.DataFrame) -> pl.DataFrame:
-        id_agr = self.trace_filter_id_agrupado.text().strip().lower()
-        chave = self.trace_filter_chave_produto.text().strip().lower()
-        out = df
-        if id_agr and "id_agrupado" in out.columns:
-            out = out.filter(pl.col("id_agrupado").cast(pl.Utf8, strict=False).fill_null("").str.to_lowercase().str.contains(id_agr, literal=True))
-        if chave and "chave_produto" in out.columns:
-            out = out.filter(pl.col("chave_produto").cast(pl.Utf8, strict=False).fill_null("").str.to_lowercase().str.contains(chave, literal=True))
-        return out
+        open_traceability_file(self, path, titulo)
 
     def aplicar_filtro_rastreabilidade(self) -> None:
-        if self._trace_df.is_empty():
-            return
-        filtrado = self._filtrar_trace_df(self._trace_df)
-        self.trace_model.set_dataframe(filtrado)
-        self.trace_table.resizeColumnsToContents()
-        self.trace_status_label.setText(f"Rastreabilidade filtrada: {filtrado.height:,} linhas")
+        apply_traceability_filter(self)
 
     def limpar_filtro_rastreabilidade(self) -> None:
-        self.trace_filter_id_agrupado.clear(); self.trace_filter_chave_produto.clear()
-        if self._trace_df.is_empty():
-            self.trace_model.set_dataframe(pl.DataFrame())
-            self.trace_status_label.setText("Nenhum arquivo de rastreabilidade carregado.")
-        else:
-            self.trace_model.set_dataframe(self._trace_df)
-            self.trace_table.resizeColumnsToContents()
-            self.trace_status_label.setText(f"Rastreabilidade: {self._trace_df.height:,} linhas")
+        clear_traceability_filter(self)
 
     def abrir_origens_brutas(self) -> None:
         self._abrir_arquivo_rastreabilidade(self._arquivos_rastreabilidade()["origens_brutas"], "Origens brutas")
