@@ -49,7 +49,6 @@ from fiscal_app.ui.aggregation_helpers import (
     update_aggregation_tables,
 )
 from fiscal_app.ui.conversion_helpers import export_conversion_excel, import_conversion_excel, load_conversion_table
-from fiscal_app.ui.dialogs import ColumnSelectorDialog, DialogoSelecaoConsultas, DialogoSelecaoTabelas
 from fiscal_app.ui.export_helpers import (
     dataset_for_export,
     export_docx,
@@ -66,6 +65,15 @@ from fiscal_app.ui.file_navigation_helpers import (
     refresh_filter_list_widget,
     update_context_label,
     update_page_label,
+)
+from fiscal_app.ui.filter_helpers import (
+    add_filter_from_form,
+    apply_quick_filters,
+    choose_columns,
+    clear_filters,
+    next_page,
+    prev_page,
+    remove_selected_filter,
 )
 from fiscal_app.ui.sql_helpers import (
     clear_param_form,
@@ -89,7 +97,6 @@ from fiscal_app.ui.traceability_helpers import (
     open_traceability_file,
     traceability_files,
 )
-from fiscal_app.utils.text import remove_accents
 
 
 class PipelineWorker(QThread):
@@ -681,42 +688,25 @@ class MainWindow(QMainWindow):
         update_context_label(self)
 
     def add_filter_from_form(self) -> None:
-        column = self.filter_column.currentText().strip(); operator = self.filter_operator.currentText().strip(); value = self.filter_value.text().strip()
-        if not column:
-            self.show_error("Filtro inválido", "Selecione uma coluna para filtrar."); return
-        if operator not in {"é nulo", "não é nulo"} and value == "":
-            self.show_error("Filtro inválido", "Informe um valor para o filtro escolhido."); return
-        self.state.filters = self.state.filters or []; self.state.filters.append(FilterCondition(column=column, operator=operator, value=value))
-        self.state.current_page = 1; self.filter_value.clear(); self.reload_table()
+        add_filter_from_form(self)
 
     def clear_filters(self) -> None:
-        self.state.filters = []; self.state.current_page = 1; self.reload_table()
+        clear_filters(self)
 
     def remove_selected_filter(self) -> None:
-        row = self.filter_list.currentRow()
-        if row < 0 or not self.state.filters: return
-        self.state.filters.pop(row); self.state.current_page = 1; self.reload_table()
+        remove_selected_filter(self)
 
     def _refresh_filter_list_widget(self) -> None:
         refresh_filter_list_widget(self)
 
     def choose_columns(self) -> None:
-        if not self.state.all_columns: return
-        dialog = ColumnSelectorDialog(self.state.all_columns, self.state.visible_columns or self.state.all_columns, self)
-        if dialog.exec():
-            selected = dialog.selected_columns()
-            if not selected:
-                self.show_error("Seleção inválida", "Pelo menos uma coluna deve permanecer visível."); return
-            self.state.visible_columns = selected; self.state.current_page = 1; self.reload_table()
+        choose_columns(self)
 
     def prev_page(self) -> None:
-        if self.state.current_page > 1:
-            self.state.current_page -= 1; self.reload_table()
+        prev_page(self)
 
     def next_page(self) -> None:
-        total_pages = max(1, ((self.state.total_rows - 1) // self.state.page_size) + 1 if self.state.total_rows else 1)
-        if self.state.current_page < total_pages:
-            self.state.current_page += 1; self.reload_table()
+        next_page(self)
 
     def _save_dialog(self, title: str, pattern: str) -> Path | None:
         return save_dialog(self, title, pattern)
@@ -743,37 +733,7 @@ class MainWindow(QMainWindow):
         execute_aggregation(self)
 
     def apply_quick_filters(self) -> None:
-        idx = self.tabs.currentIndex()
-        if idx == 0:
-            fields = {"descricao_normalizada": self.qf_norm.text().strip(), "descricao": self.qf_desc.text().strip(), "ncm_padrao": self.qf_ncm.text().strip(), "cest_padrao": self.qf_cest.text().strip()}
-        elif idx == 2:
-            fields = {"descricao_normalizada": self.aqf_norm.text().strip(), "descricao": self.aqf_desc.text().strip(), "ncm_padrao": self.aqf_ncm.text().strip(), "cest_padrao": self.aqf_cest.text().strip()}
-        else:
-            return
-        quick_cols = set(fields.keys())
-        new_filters = [f for f in (self.state.filters or []) if f.column not in quick_cols]
-        for col, val in fields.items():
-            if not val: continue
-            actual_col = col
-            if self.state.all_columns:
-                alternatives = {
-                    "ncm_padrao": ["ncm_padrao", "NCM_padrao", "lista_ncm"],
-                    "cest_padrao": ["cest_padrao", "CEST_padrao", "lista_cest"],
-                    "descricao_normalizada": ["descricao_normalizada", "descricao", "descr_norm"],
-                    "descricao": ["descricao", "lista_descricoes", "descr"],
-                }
-                if col in alternatives:
-                    for alt in alternatives[col]:
-                        if alt in self.state.all_columns: actual_col = alt; break
-                elif col not in self.state.all_columns:
-                    target_clean = remove_accents(col).lower()
-                    for c in self.state.all_columns:
-                        if remove_accents(c).lower() == target_clean: actual_col = c; break
-            new_filters.append(FilterCondition(column=actual_col, operator="contém", value=val))
-        self.state.filters = new_filters; self.state.current_page = 1
-        self.reload_table(update_main_view=(idx == 0))
-        if idx == 2:
-            self.aggregation_table_model.set_dataframe(self.current_page_df_all); self.aggregation_table_view.resizeColumnsToContents()
+        apply_quick_filters(self)
 
     def refresh_logs(self) -> None:
         import json
