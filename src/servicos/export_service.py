@@ -16,11 +16,29 @@ class ExportService:
     @staticmethod
     def _iter_rows(df: pl.DataFrame):
         """
-        Otimização: Iteração por tuplas evita a criação de dicionários
-        pesados para cada linha, melhorando performance e memória.
+        Otimização: Substituído o loop manual do python na aplicação do display_cell
+        por operações nativas do Polars, resultando em conversão muito mais eficiente.
         """
-        for row in df.iter_rows():
-            yield [display_cell(cell) for cell in row]
+        cols = []
+        for c in df.columns:
+            dtype = df[c].dtype
+            if isinstance(dtype, (pl.List, pl.Struct, pl.Object)):
+                cols.append(pl.col(c).map_elements(display_cell, return_dtype=pl.String).fill_null("").alias(c))
+            elif dtype == pl.Boolean:
+                cols.append(
+                    pl.when(pl.col(c))
+                    .then(pl.lit("true"))
+                    .when(~pl.col(c))
+                    .then(pl.lit("false"))
+                    .otherwise(pl.lit(""))
+                    .alias(c)
+                )
+            else:
+                cols.append(pl.col(c).cast(pl.String).fill_null("").alias(c))
+
+        df_str = df.select(cols)
+        for row in df_str.iter_rows():
+            yield row
 
     def export_excel(self, target: Path, df: pl.DataFrame, sheet_name: str = "Dados") -> Path:
         """
