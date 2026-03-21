@@ -1,0 +1,17 @@
+--- server/python/routers/references.py
++++ server/python/routers/references.py
+@@ -1,5 +1,6 @@
+ import logging
+ import polars as pl
+ import re
++import asyncio
+ from pathlib import Path
+ from fastapi import APIRouter, HTTPException
+@@ -25,7 +26,7 @@
+
+     try:
+         codigo_limpo = re.sub(r"[^0-9]", "", codigo)
+-        df = pl.read_parquet(str(ncm_path))
++        df = await asyncio.to_thread(pl.read_parquet, str(ncm_path))
+
+         cols = df.columns

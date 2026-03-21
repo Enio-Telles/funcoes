@@ -71,7 +71,7 @@ async def get_ncm_details(codigo: str):
 
         if is_invalid(descr_capitulo) and ncm_capitulos_path.exists():
             try:
-                df_cap = (await asyncio.to_thread(pl.read_parquet, str(ncm_capitulos_path))).with_columns(
+                df_cap = pl.read_parquet(str(ncm_capitulos_path)).with_columns(
                     pl.col("NCM").cast(pl.Utf8).fill_null("").str.replace_all(r"[^0-9]", "").alias("__cap_norm")
                 )
                 cap_res = df_cap.filter(pl.col("__cap_norm") == ncm_val[:2]).head(1)
@@ -117,7 +117,7 @@ async def get_ncm_details(codigo: str):
 
             if is_invalid(descr_posicao) and ncm_posicao_path.exists():
                 try:
-                    df_pos = (await asyncio.to_thread(pl.read_parquet, str(ncm_posicao_path))).with_columns(
+                    df_pos = pl.read_parquet(str(ncm_posicao_path)).with_columns(
                         pl.col("NCM").cast(pl.Utf8).fill_null("").str.replace_all(r"[^0-9]", "").alias("__pos_norm")
                     )
                     pos_ref = df_pos.filter(pl.col("__pos_norm") == pos_prefix).head(1)
@@ -160,43 +160,43 @@ async def get_cest_details(codigo: str):
     """Busca detalhes do CEST (Segmento, NCMs associados, Descrição)."""
     cest_path = _REF_DIR / "CEST" / "cest.parquet"
     seg_path = _REF_DIR / "CEST" / "segmentos_mercadorias.parquet"
-    
+
     if not cest_path.exists():
         raise HTTPException(status_code=404, detail="Tabela CEST não encontrada.")
-    
+
     try:
         codigo_limpo = re.sub(r"[^0-9]", "", codigo)
-        df_cest = await asyncio.to_thread(pl.read_parquet, str(cest_path))
-        
+        df_cest = pl.read_parquet(str(cest_path))
+
         # Filtra pelo CEST (normalizando a coluna na comparação)
         res_cest = df_cest.filter(pl.col("CEST").str.replace_all(r"[^0-9]", "") == codigo_limpo)
-        
+
         if res_cest.is_empty():
             # Tenta busca parcial se não achar exato (ex: 4 ou 7 dígitos)
             res_cest = df_cest.filter(pl.col("CEST").str.replace_all(r"[^0-9]", "").str.starts_with(codigo_limpo[:4]))
             if res_cest.is_empty():
                 raise HTTPException(status_code=404, detail="CEST não localizado.")
-        
+
         # Coleta todas as descrições e NCMs associados a este CEST
         descricoes = res_cest.select("DESCRICAO").unique().to_series().to_list()
         ncms = res_cest.select("NCM").unique().to_series().to_list()
-        
+
         # Extrai segmento (2 primeiros dígitos do CEST)
         cest_row = res_cest.row(0, named=True)
         cest_val = re.sub(r"[^0-9]", "", str(cest_row.get("CEST", "")))
         segmento_id = cest_val[:2]
-        
+
         # Busca nome do segmento
         segmento_nome = "Não localizado"
         if seg_path.exists():
-            df_seg = await asyncio.to_thread(pl.read_parquet, str(seg_path))
+            df_seg = pl.read_parquet(str(seg_path))
             res_seg = df_seg.filter(pl.col("Codigo_Segmento") == segmento_id)
             if not res_seg.is_empty():
                 segmento_nome = res_seg.row(0, named=True).get("Nome_Segmento", "Não localizado")
-        
+
         # Formatação Segmento: Codigo_Segmento - Nome_Segmento
         seg_formatado = f"Segmento: {segmento_id} - {segmento_nome}"
-        
+
         # Buscar descrição da posição do NCM associado
         ncm_associado = str(ncms[0]) if ncms else ""
         descr_pos_ncm = ""
@@ -206,18 +206,18 @@ async def get_cest_details(codigo: str):
                 ncm_pos_query = re.sub(r"[^0-9]", "", ncm_associado)[:4]
                 ncm_ref_path = _REF_DIR / "NCM" / "tabela_ncm.parquet"
                 if ncm_ref_path.exists():
-                    df_ncm = await asyncio.to_thread(pl.read_parquet, str(ncm_ref_path))
+                    df_ncm = pl.read_parquet(str(ncm_ref_path))
                     # Busca a posição normalizando a coluna Posicao
                     pos_row = df_ncm.filter(pl.col("Posicao").str.replace_all(r"[^0-9]", "") == ncm_pos_query).head(1)
                     if not pos_row.is_empty():
                         descr_pos_ncm = pos_row.row(0, named=True).get("Descr_Posicao", "")
             except:
                 pass
-        
+
         # Formatação Descrição: Segmento na linha 1; Descrição na linha 2; NCMs na linha 3
         ncm_info = f"{ncm_associado} ({descr_pos_ncm})" if descr_pos_ncm else ncm_associado
         full_desc = f"{seg_formatado}\nDescrição: {descricoes[0] if descricoes else ''}\nNCMs: {ncm_info}"
-        
+
         return {
             "success": True,
             "data": {
