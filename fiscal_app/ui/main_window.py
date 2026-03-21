@@ -36,7 +36,7 @@ from fiscal_app.models.table_model import PolarsTableModel
 from fiscal_app.services.aggregation_service import ServicoAgregacao
 from fiscal_app.services.export_service import ExportService
 from fiscal_app.services.parquet_service import FilterCondition, ParquetService
-from fiscal_app.services.pipeline_funcoes_service import ResultadoPipeline, ServicoPipelineCompleto
+from fiscal_app.services.pipeline_funcoes_service import ServicoPipelineCompleto
 from fiscal_app.services.query_worker import QueryWorker
 from fiscal_app.services.registry_service import RegistryService
 from fiscal_app.services.sql_service import SqlService
@@ -74,6 +74,13 @@ from fiscal_app.ui.filter_helpers import (
     next_page,
     prev_page,
     remove_selected_filter,
+)
+from fiscal_app.ui.pipeline_helpers import (
+    on_cnpj_selected,
+    on_pipeline_failed,
+    on_pipeline_finished,
+    refresh_cnpjs,
+    run_pipeline_for_input,
 )
 from fiscal_app.ui.sql_helpers import (
     clear_param_form,
@@ -604,70 +611,19 @@ class MainWindow(QMainWindow):
         QMessageBox.information(self, title, message)
 
     def refresh_cnpjs(self) -> None:
-        known = {record.cnpj for record in self.registry_service.list_records()}
-        known.update(self.parquet_service.list_cnpjs())
-        current = self.state.current_cnpj
-        self.cnpj_list.clear()
-        for cnpj in sorted(known):
-            self.cnpj_list.addItem(cnpj)
-        if current:
-            matches = self.cnpj_list.findItems(current, Qt.MatchExactly)
-            if matches:
-                self.cnpj_list.setCurrentItem(matches[0])
+        refresh_cnpjs(self)
 
     def run_pipeline_for_input(self) -> None:
-        try:
-            cnpj = self.servico_pipeline_funcoes.servico_extracao.sanitizar_cnpj(self.cnpj_input.text())
-        except Exception as exc:
-            self.show_error("CNPJ inválido", str(exc)); return
-        consultas_disp = self.servico_pipeline_funcoes.servico_extracao.listar_consultas()
-        if not consultas_disp:
-            self.show_error("Sem consultas", "Nenhum arquivo .sql encontrado em c:\\funcoes\\consultas_fonte"); return
-        dlg_sql = DialogoSelecaoConsultas(consultas_disp, self)
-        if not dlg_sql.exec(): return
-        sql_selecionados = dlg_sql.consultas_selecionadas()
-        tabelas_disp = self.servico_pipeline_funcoes.servico_tabelas.listar_tabelas()
-        dlg_tab = DialogoSelecaoTabelas(tabelas_disp, self)
-        if not dlg_tab.exec(): return
-        tabelas_selecionadas = dlg_tab.tabelas_selecionadas()
-        if not sql_selecionados and not tabelas_selecionadas: return
-        self.btn_run_pipeline.setEnabled(False)
-        self.status.showMessage(f"Executando pipeline oficial para {cnpj}...")
-        data_limite = self.date_input.date().toString("dd/MM/yyyy")
-        self.pipeline_worker = PipelineWorker(self.servico_pipeline_funcoes, cnpj, sql_selecionados, tabelas_selecionadas, data_limite)
-        self.pipeline_worker.finished_ok.connect(self.on_pipeline_finished)
-        self.pipeline_worker.failed.connect(self.on_pipeline_failed)
-        self.pipeline_worker.progress.connect(self.status.showMessage)
-        self.pipeline_worker.start()
+        run_pipeline_for_input(self, PipelineWorker)
 
-    def on_pipeline_finished(self, result: ResultadoPipeline) -> None:
-        self.btn_run_pipeline.setEnabled(True)
-        self.registry_service.upsert(result.cnpj, ran_now=True)
-        self.status.showMessage(f"Pipeline oficial concluído para {result.cnpj}.")
-        self.refresh_cnpjs()
-        matches = self.cnpj_list.findItems(result.cnpj, Qt.MatchExactly)
-        if matches:
-            self.cnpj_list.setCurrentItem(matches[0])
-            self.refresh_file_tree(result.cnpj)
-            self.atualizar_aba_conversao()
-        tabelas_fluxo = [item for item in result.arquivos_gerados if item in {"produtos_unidades", "produtos", "produtos_agrupados", "produtos_final", "fatores_conversao"}]
-        msg = "\n".join(result.mensagens[-10:]) if result.mensagens else "Processado com sucesso."
-        self.show_info("Pipeline oficial concluído", f"CNPJ {result.cnpj} processado.\n\nFluxo de produtos: {', '.join(tabelas_fluxo) if tabelas_fluxo else 'sem etapas registradas'}\n\nÚltimas mensagens:\n{msg}")
+    def on_pipeline_finished(self, result) -> None:
+        on_pipeline_finished(self, result)
 
     def on_pipeline_failed(self, message: str) -> None:
-        self.btn_run_pipeline.setEnabled(True)
-        self.status.showMessage("Falha na execução do pipeline oficial.")
-        self.show_error("Falha no pipeline oficial", message)
+        on_pipeline_failed(self, message)
 
     def on_cnpj_selected(self) -> None:
-        item = self.cnpj_list.currentItem()
-        if item is None: return
-        cnpj = item.text(); self.state.current_cnpj = cnpj
-        self.registry_service.upsert(cnpj, ran_now=False)
-        self.refresh_file_tree(cnpj)
-        self.atualizar_aba_conversao()
-        self.recarregar_historico_agregacao(cnpj)
-        self.limpar_rastreabilidade()
+        on_cnpj_selected(self)
 
     def refresh_file_tree(self, cnpj: str) -> None:
         refresh_file_tree(self, cnpj)
