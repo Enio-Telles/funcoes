@@ -767,28 +767,60 @@ def _empty_batch_similarity():
     return type("Similarity", (), {"engine": "DOCUMENTAL", "use_cache": True, "top_k": 8, "min_score": 0.72})()
 
 
+
+def _build_empty_preview_response(
+    cnpj_limpo: str,
+    source_context: str,
+    similarity_engine: str,
+    similarity_use_cache: bool,
+    similarity_top_k: int,
+    similarity_min_score: float,
+    rule_ids: list[str],
+    dataset_hash: str | None = None,
+    include_by_rule: bool = False
+) -> dict[str, Any]:
+    return {
+        "success": True,
+        "cnpj": cnpj_limpo,
+        "source_context": source_context,
+        "similarity_source": {
+            "engine": similarity_engine,
+            "use_cache": similarity_use_cache,
+            "top_k": similarity_top_k,
+            "min_score": similarity_min_score,
+        },
+        "rule_ids": rule_ids,
+        "dataset_hash": dataset_hash,
+        "generated_at_utc": datetime.now(UTC).isoformat(),
+        "resumo": {
+            "total_rows_considered": 0,
+            "total_candidate_pairs": 0,
+            "total_components": 0,
+            "total_proposals": 0,
+            "by_rule": [
+                {"rule_id": rule_id, "button_label": BATCH_RULE_CONFIG[rule_id]["button_label"], "proposal_count": 0, "group_count": 0}
+                for rule_id in rule_ids
+            ] if include_by_rule else [],
+        },
+        "proposals": [],
+    }
+
 def _run_preview_unificacao_lote(req: UnificacaoLotePreviewRequest) -> dict[str, Any]:
     cnpj_limpo = re.sub(r"[^0-9]", "", req.cnpj)
     _, dir_analises, _ = _load_cnpj_dirs(cnpj_limpo)
     agregados_path = dir_analises / f"produtos_agregados_{cnpj_limpo}.parquet"
     if not agregados_path.exists():
-        return {
-            "success": True,
-            "cnpj": cnpj_limpo,
-            "source_context": str(req.source_context or "REVISAO_FINAL"),
-            "similarity_source": {"engine": "DOCUMENTAL", "use_cache": True, "top_k": 8, "min_score": 0.72},
-            "rule_ids": list(BATCH_RULE_PRIORITY),
-            "dataset_hash": None,
-            "generated_at_utc": datetime.now(UTC).isoformat(),
-            "resumo": {
-                "total_rows_considered": 0,
-                "total_candidate_pairs": 0,
-                "total_components": 0,
-                "total_proposals": 0,
-                "by_rule": [],
-            },
-            "proposals": [],
-        }
+        return _build_empty_preview_response(
+            cnpj_limpo,
+            str(req.source_context or "REVISAO_FINAL"),
+            "DOCUMENTAL",
+            True,
+            8,
+            0.72,
+            list(BATCH_RULE_PRIORITY),
+            dataset_hash=None,
+            include_by_rule=False
+        )
 
     filters = req.filters or _empty_batch_filters()
     options = req.options or _empty_batch_options()
@@ -811,31 +843,17 @@ def _run_preview_unificacao_lote(req: UnificacaoLotePreviewRequest) -> dict[str,
         df_agregados = ocultar_grupos_verificados(df_agregados, df_status, bool(filters.show_verified))
 
     if df_agregados.is_empty():
-        return {
-            "success": True,
-            "cnpj": cnpj_limpo,
-            "source_context": str(req.source_context or "REVISAO_FINAL"),
-            "similarity_source": {
-                "engine": str(similarity.engine or "DOCUMENTAL").strip().upper(),
-                "use_cache": bool(similarity.use_cache),
-                "top_k": int(similarity.top_k or 8),
-                "min_score": float(similarity.min_score or 0.72),
-            },
-            "rule_ids": rule_ids,
-            "dataset_hash": compute_file_sha1(agregados_path),
-            "generated_at_utc": datetime.now(UTC).isoformat(),
-            "resumo": {
-                "total_rows_considered": 0,
-                "total_candidate_pairs": 0,
-                "total_components": 0,
-                "total_proposals": 0,
-                "by_rule": [
-                    {"rule_id": rule_id, "button_label": BATCH_RULE_CONFIG[rule_id]["button_label"], "proposal_count": 0, "group_count": 0}
-                    for rule_id in rule_ids
-                ],
-            },
-            "proposals": [],
-        }
+        return _build_empty_preview_response(
+            cnpj_limpo,
+            str(req.source_context or "REVISAO_FINAL"),
+            str(similarity.engine or "DOCUMENTAL").strip().upper(),
+            bool(similarity.use_cache),
+            int(similarity.top_k or 8),
+            float(similarity.min_score or 0.72),
+            rule_ids,
+            dataset_hash=compute_file_sha1(agregados_path),
+            include_by_rule=True
+        )
 
     df_pairs, engine_used = _carregar_pares_preview_lote(
         cnpj_limpo,
