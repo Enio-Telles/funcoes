@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
+from fastapi.concurrency import run_in_threadpool
 from io import BytesIO
 import polars as pl
 from core.models import ExcelExportRequest
@@ -44,6 +45,22 @@ async def export_to_excel(request: ExcelExportRequest):
     return {"success": True, "results": results}
 
 
+def _process_export_excel(source: Path) -> StreamingResponse:
+    import pandas as pd
+    import tempfile
+    df = pl.read_parquet(str(source))
+    with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
+        tmp_path = tmp.name
+    try:
+        with pd.ExcelWriter(tmp_path, engine="xlsxwriter") as writer:
+            _write_excel_with_format(df.to_pandas(), writer)
+        with open(tmp_path, "rb") as f:
+            buffer = BytesIO(f.read())
+        buffer.seek(0)
+        return StreamingResponse(buffer, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Content-Disposition": f'attachment; filename="{source.stem}.xlsx"'})
+    finally:
+        if Path(tmp_path).exists(): Path(tmp_path).unlink()
+
 @router.get("/excel-download")
 async def export_excel_download(file_path: str = Query(...)):
     """Exporta um Parquet para Excel e retorna como download."""
@@ -51,20 +68,7 @@ async def export_excel_download(file_path: str = Query(...)):
     if not source.exists():
         raise HTTPException(status_code=404, detail="Arquivo não encontrado")
     try:
-        import pandas as pd
-        import tempfile
-        df = pl.read_parquet(str(source))
-        with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
-            tmp_path = tmp.name
-        try:
-            with pd.ExcelWriter(tmp_path, engine="xlsxwriter") as writer:
-                _write_excel_with_format(df.to_pandas(), writer)
-            with open(tmp_path, "rb") as f:
-                buffer = BytesIO(f.read())
-            buffer.seek(0)
-            return StreamingResponse(buffer, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Content-Disposition": f'attachment; filename="{source.stem}.xlsx"'})
-        finally:
-            if Path(tmp_path).exists(): Path(tmp_path).unlink()
+        return await run_in_threadpool(_process_export_excel, source)
     except Exception as e:
         logger.error("[export_excel_download] Erro: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
