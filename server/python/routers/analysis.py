@@ -1,3 +1,4 @@
+import asyncio
 import re
 import os
 import sys
@@ -38,7 +39,7 @@ async def analise_faturamento_periodo(req: AnaliseFaturamentoRequest):
         if not src.exists():
             raise HTTPException(status_code=404, detail=f"Arquivo base não encontrado: {src}")
 
-        df = pl.read_parquet(str(src))
+        df = await asyncio.to_thread(pl.read_parquet, str(src))
         cols = {c.lower(): c for c in df.columns}
         col_data = cols.get("emissao_data", "emissao_data")
         col_valor = cols.get("valor_total", "valor_total")
