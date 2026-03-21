@@ -1,37 +1,14 @@
 from __future__ import annotations
 
 import logging
-import re
-import sys
-import unicodedata
 from pathlib import Path
 
 import polars as pl
 from rich import print as rprint
 
+from _shared import FUNCOES_DIR, sanitize_cnpj, salvar_para_parquet
+
 logging.basicConfig(level=logging.INFO, format="%(message)s")
-
-FUNCOES_DIR = (
-    Path(r"c:\funcoes")
-    if Path(r"c:\funcoes").exists()
-    else Path(__file__).resolve().parent.parent.parent.parent
-)
-AUXILIARES_DIR = FUNCOES_DIR / "funcoes_auxiliares"
-
-if str(AUXILIARES_DIR) not in sys.path:
-    sys.path.insert(0, str(AUXILIARES_DIR))
-
-try:
-    from salvar_para_parquet import salvar_para_parquet
-except ImportError:
-    def salvar_para_parquet(df, pasta, nome):
-        pasta.mkdir(parents=True, exist_ok=True)
-        df.write_parquet(pasta / nome)
-        return True
-
-
-def _sanitizar_cnpj(cnpj: str) -> str:
-    return re.sub(r"[^0-9]", "", str(cnpj))
 
 
 def precos_medios_produtos_final(df_unidades: pl.DataFrame) -> pl.DataFrame:
@@ -96,7 +73,7 @@ def _determinar_unid_ref(group_df: pl.DataFrame) -> str | None:
 
 
 def gerar_fatores_conversao(cnpj: str, pasta_cnpj: Path | None = None) -> pl.DataFrame | None:
-    cnpj = _sanitizar_cnpj(cnpj)
+    cnpj = sanitize_cnpj(cnpj)
     if pasta_cnpj is None:
         pasta_cnpj = FUNCOES_DIR / "CNPJ" / cnpj
 
@@ -214,6 +191,7 @@ def gerar_fatores_conversao(cnpj: str, pasta_cnpj: Path | None = None) -> pl.Dat
 
 
 if __name__ == "__main__":
+    import sys
     if len(sys.argv) > 1:
         gerar_fatores_conversao(sys.argv[1])
     else:

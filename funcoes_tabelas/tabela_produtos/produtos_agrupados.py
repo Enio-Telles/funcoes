@@ -6,37 +6,15 @@ Tabela produtos_agrupados e recalcular produtos_final com rastreabilidade.
 
 from __future__ import annotations
 
-import re
-import sys
 from collections import Counter
 from pathlib import Path
 
 import polars as pl
 from rich import print as rprint
 
-FUNCOES_DIR = (
-    Path(r"c:\funcoes")
-    if Path(r"c:\funcoes").exists()
-    else Path(__file__).resolve().parent.parent.parent.parent
-)
-AUXILIARES_DIR = FUNCOES_DIR / "funcoes_auxiliares"
-
-if str(AUXILIARES_DIR) not in sys.path:
-    sys.path.insert(0, str(AUXILIARES_DIR))
-
-try:
-    from salvar_para_parquet import salvar_para_parquet
-except ImportError:
-    def salvar_para_parquet(df, pasta, nome):
-        pasta.mkdir(parents=True, exist_ok=True)
-        df.write_parquet(pasta / nome)
-        return True
+from _shared import FUNCOES_DIR, sanitize_cnpj, salvar_para_parquet
 
 FONTES_EMITIDAS = {"NFe", "NFCe"}
-
-
-def _sanitizar_cnpj(cnpj: str) -> str:
-    return re.sub(r"[^0-9]", "", str(cnpj))
 
 
 def _limpos(lista: list[str] | None) -> list[str]:
@@ -58,10 +36,6 @@ def _moda(lista: list[str] | None) -> str | None:
 
 def _divergente(lista: list[str] | None) -> bool:
     return len(set(_limpos(lista))) > 1
-
-
-def _campos_preenchidos(reg: dict) -> int:
-    return sum(1 for campo in ["ncm", "cest", "gtin"] if reg.get(campo) not in (None, ""))
 
 
 def _escolher_valor_padrao(df_src: pl.DataFrame, coluna: str, preferir_emitidas: bool = True) -> str | None:
@@ -142,7 +116,7 @@ def gerar_produtos_agrupados(
     pasta_cnpj: Path | None = None,
     agrupamentos_manuais: dict[str, list[str]] | None = None,
 ) -> pl.DataFrame | None:
-    cnpj = _sanitizar_cnpj(cnpj)
+    cnpj = sanitize_cnpj(cnpj)
     if pasta_cnpj is None:
         pasta_cnpj = FUNCOES_DIR / "CNPJ" / cnpj
 
@@ -250,6 +224,7 @@ def gerar_produtos_agrupados(
 
 
 if __name__ == "__main__":
+    import sys
     if len(sys.argv) > 1:
         gerar_produtos_agrupados(sys.argv[1])
     else:
