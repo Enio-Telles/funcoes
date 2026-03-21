@@ -80,14 +80,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger("sefin_audit_python")
 
-allowed_origins_env = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000")
-allowed_origins = [o.strip() for o in allowed_origins_env.split(",") if o.strip()]
-
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allowed_origins,
+    allow_origins=["*"],
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_methods=["*"],
     allow_headers=["*"],
 )
 
@@ -397,14 +394,14 @@ async def get_referencia_cest():
     try:
         cest_path = _PROJETO_DIR / "referencias" / "CEST" / "cest.parquet"
         seg_path = _PROJETO_DIR / "referencias" / "CEST" / "segmentos_mercadorias.parquet"
-        
+
         data_cest = []
         data_seg = []
         if cest_path.exists():
             data_cest = pl.read_parquet(cest_path).to_dicts()
         if seg_path.exists():
             data_seg = pl.read_parquet(seg_path).to_dicts()
-            
+
         return {"success": True, "cest": data_cest, "segmentos": data_seg}
     except Exception as e:
         logger.error("[get_referencia_cest] Erro: %s\n%s", e, traceback.format_exc())
@@ -419,26 +416,26 @@ async def get_referencia_ncm_codigo(codigo: str):
         if not ncm_path.exists():
             return {"success": False, "message": "Arquivo tabela_ncm.parquet não encontrado"}
         df = pl.read_parquet(ncm_path)
-        
+
         # Tenta match exato
         row = df.filter(pl.col("Codigo_NCM").str.replace_all(r"[^0-9]", "") == codigo_limpo)
-        
+
         if row.height == 0:
             # Fallback: Tenta match pelos primeiros 6 dígitos (ou 4)
             row = df.filter(pl.col("Codigo_NCM").str.replace_all(r"[^0-9]", "").str.starts_with(codigo_limpo[:6]))
             if row.height == 0:
                 row = df.filter(pl.col("Codigo_NCM").str.replace_all(r"[^0-9]", "").str.starts_with(codigo_limpo[:4]))
-                
+
         if row.height == 0:
             return {"success": False, "message": f"NCM {codigo} não localizado"}
-            
+
         data = row.to_dicts()[0]
-        
+
         # Formatação solicitada: Capítulo: Capitulo - Descr_Capitulo; Posição: Posicao - Descr_Posicao; NCM: Descricao
         formatted_desc = f"Capítulo: {data.get('Capitulo', '')} - {data.get('Descr_Capitulo', '')}; Posição: {data.get('Posicao', '')} - {data.get('Descr_Posicao', '')}; NCM: {data.get('Descricao', '')}"
-        
+
         return {
-            "success": True, 
+            "success": True,
             "data": {
                 "codigo": data.get("Codigo_NCM", codigo),
                 "capitulo": data.get("Capitulo", ""),
@@ -459,30 +456,30 @@ async def get_referencia_cest_codigo(codigo: str):
         codigo_limpo = re.sub(r"[^0-9]", "", codigo)
         cest_path = _PROJETO_DIR / "referencias" / "CEST" / "cest.parquet"
         seg_path = _PROJETO_DIR / "referencias" / "CEST" / "segmentos_mercadorias.parquet"
-        
+
         if not cest_path.exists() or not seg_path.exists():
             return {"success": False, "message": "Arquivos de referência CEST não encontrados"}
-            
+
         df_cest = pl.read_parquet(cest_path)
         # Tenta match exato
         row = df_cest.filter(pl.col("CEST").str.replace_all(r"[^0-9]", "") == codigo_limpo)
-        
+
         if row.height == 0:
             # Fallback CEST: tenta match parcial se houver pontos ou variações de tamanho
             row = df_cest.filter(pl.col("CEST").str.replace_all(r"[^0-9]", "").str.starts_with(codigo_limpo[:4]))
 
         if row.height == 0:
             return {"success": False, "message": f"CEST {codigo} não localizado"}
-            
+
         data = row.to_dicts()[0]
-        
+
         df_seg = pl.read_parquet(seg_path)
         seg_row = df_seg.filter(pl.col("Codigo_Segmento") == codigo_limpo[:2])
         nome_segmento = seg_row["Nome_Segmento"][0] if seg_row.height > 0 else ""
-        
+
         # Formatação Segmento: Codigo_Segmento - Nome_Segmento
         seg_formatado = f"Segmento: {codigo_limpo[:2]} - {nome_segmento}"
-        
+
         # Buscar descrição da posição do NCM associado
         ncm_associado = str(data.get("NCM", ""))
         descr_pos_ncm = ""
@@ -498,11 +495,11 @@ async def get_referencia_cest_codigo(codigo: str):
                         descr_pos_ncm = pos_row["Descr_Posicao"][0]
             except:
                 pass
-        
+
         # Formatação Descrição: DESCRICAO; NCMs: lista NCM para o CEST; incluir descrição da posição do NCM
         ncm_info = f"{ncm_associado} ({descr_pos_ncm})" if descr_pos_ncm else ncm_associado
         full_desc = f"{seg_formatado}; Descrição: {data.get('DESCRICAO', '')}; NCMs: {ncm_info}"
-        
+
         return {
             "success": True,
             "data": {
@@ -530,21 +527,21 @@ async def get_produtos_revisao_manual(cnpj: str = Query(...)):
         _spec = importlib.util.spec_from_file_location("sefin_config_local", str(_config_path))
         _sefin_config = importlib.util.module_from_spec(_spec)
         _spec.loader.exec_module(_sefin_config)
-        
+
         _, dir_analises, _ = _sefin_config.obter_diretorios_cnpj(cnpj_limpo)
         agregados_path = dir_analises / f"produtos_agregados_{cnpj_limpo}.parquet"
-        
+
         if not agregados_path.exists():
             return {"success": True, "data": []}
-            
+
         df = pl.scan_parquet(str(agregados_path)).filter(pl.col("requer_revisao_manual") == True).collect()
-        
+
         return {"success": True, "data": df.to_dicts()}
     except Exception as e:
         logger.error("[get_produtos_revisao_manual] Erro: %s\n%s", e, traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
-        
-        
+
+
 @app.get("/api/python/produtos/detalhes-codigo")
 async def get_detalhes_produto(cnpj: str = Query(...), codigo: str = Query(...)):
     """Retorna as linhas originais (fontes) associadas a um código master."""
@@ -557,25 +554,25 @@ async def get_detalhes_produto(cnpj: str = Query(...), codigo: str = Query(...))
         _spec = importlib.util.spec_from_file_location("sefin_config_local", str(_config_path))
         _sefin_config = importlib.util.module_from_spec(_spec)
         _spec.loader.exec_module(_sefin_config)
-        
+
         _, dir_analises, _ = _sefin_config.obter_diretorios_cnpj(cnpj_limpo)
         detalhes_path = dir_analises / f"base_detalhes_produtos_{cnpj_limpo}.parquet"
-        
+
         if not detalhes_path.exists():
             return {"success": True, "data": []}
-            
+
         # Normaliza a busca removendo zeros à esquerda tanto no arquivo quanto no parâmetro
         # pl.col("codigo").str.lstrip("0") == codigo.lstrip("0")
-        # Mas atenção: se o código for só zeros, lstrip("0") retorna vazio. 
+        # Mas atenção: se o código for só zeros, lstrip("0") retorna vazio.
         # Uma alternativa segura é converter para int e comparar, ou usar regex/slice se o tamanho for fixo.
         # Vamos usar lstrip("0") e garantir que não fique vazio.
         codigo_norm = codigo.lstrip("0")
         if not codigo_norm: codigo_norm = "0"
-        
+
         df = pl.scan_parquet(str(detalhes_path)).filter(
             pl.col("codigo").str.replace("^0+", "") == codigo_norm
         ).collect()
-        
+
         return {"success": True, "codigo": codigo, "itens": df.to_dicts()}
     except Exception as e:
         logger.error("[get_detalhes_produto] Erro: %s\n%s", e, traceback.format_exc())
@@ -590,33 +587,33 @@ async def submit_revisao_manual(req: RevisaoManualSubmitRequest):
         raise HTTPException(status_code=400, detail="CNPJ inválido")
     try:
         import importlib.util
-        
+
         _config_path = _PROJETO_DIR / "config.py"
         _spec = importlib.util.spec_from_file_location("sefin_config_local", str(_config_path))
         _sefin_config = importlib.util.module_from_spec(_spec)
         _spec.loader.exec_module(_sefin_config)
-        
+
         _, dir_analises, _ = _sefin_config.obter_diretorios_cnpj(cnpj_limpo)
         mapa_path = dir_analises / f"mapa_manual_unificacao_{cnpj_limpo}.parquet"
-        
+
         decisoes = [item.dict() for item in req.decisoes]
         df_novo = pl.DataFrame(decisoes)
-        
+
         if mapa_path.exists():
             df_existente = pl.read_parquet(str(mapa_path))
             df_merge = pl.concat([df_existente, df_novo], how="diagonal_relaxed").unique(
-                subset=["fonte", "codigo_original", "descricao_original"], 
+                subset=["fonte", "codigo_original", "descricao_original"],
                 keep="last"
             )
             df_merge.write_parquet(mapa_path)
         else:
             df_novo.write_parquet(mapa_path)
-            
+
         logger.info(f"Revisões gravadas com sucesso no arquivo {mapa_path.name}")
-        
+
         # Agora disparamos a unificação de produtos
         unificar_produtos_unidades(cnpj_limpo)
-        
+
         return {"success": True, "message": "Revisões aplicadas com sucesso."}
     except Exception as e:
         logger.error("[submit_revisao_manual] Erro: %s\n%s", e, traceback.format_exc())
@@ -630,15 +627,15 @@ async def resolver_manual_unificar(req: ResolverManualUnificarRequest):
         raise HTTPException(status_code=400, detail="CNPJ inválido")
     try:
         import importlib.util
-        
+
         _config_path = _PROJETO_DIR / "config.py"
         _spec = importlib.util.spec_from_file_location("sefin_config_local", str(_config_path))
         _sefin_config = importlib.util.module_from_spec(_spec)
         _spec.loader.exec_module(_sefin_config)
-        
+
         _, dir_analises, _ = _sefin_config.obter_diretorios_cnpj(cnpj_limpo)
         mapa_path = dir_analises / f"mapa_manual_unificacao_{cnpj_limpo}.parquet"
-        
+
         # Mapear os produtos de entrada para o código oficial selecionado
         decisoes = []
         for item in req.itens:
@@ -654,23 +651,23 @@ async def resolver_manual_unificar(req: ResolverManualUnificarRequest):
                 "gtin_novo": req.decisao.get("gtin", "")
             }
             decisoes.append(decisao)
-            
+
         df_novo = pl.DataFrame(decisoes)
-        
+
         if mapa_path.exists():
             df_existente = pl.read_parquet(str(mapa_path))
             df_merge = pl.concat([df_existente, df_novo], how="diagonal_relaxed").unique(
-                subset=["fonte", "codigo_original", "descricao_original"], 
+                subset=["fonte", "codigo_original", "descricao_original"],
                 keep="last"
             )
             df_merge.write_parquet(mapa_path)
         else:
             df_novo.write_parquet(mapa_path)
-            
+
         logger.info(f"Unificação gravada com sucesso no arquivo {mapa_path.name}")
-        
+
         unificar_produtos_unidades(cnpj_limpo)
-        
+
         return {"status": "sucesso", "mensagem": "Unificação aplicada com sucesso. A tabela foi atualizada."}
     except Exception as e:
         logger.error("[resolver_manual_unificar] Erro: %s\n%s", e, traceback.format_exc())
@@ -684,31 +681,31 @@ async def resolver_manual_desagregar(req: ResolverManualDesagregarRequest):
         raise HTTPException(status_code=400, detail="CNPJ inválido")
     try:
         import importlib.util
-        
+
         _config_path = _PROJETO_DIR / "config.py"
         _spec = importlib.util.spec_from_file_location("sefin_config_local", str(_config_path))
         _sefin_config = importlib.util.module_from_spec(_spec)
         _spec.loader.exec_module(_sefin_config)
-        
+
         _, dir_analises, _ = _sefin_config.obter_diretorios_cnpj(cnpj_limpo)
         mapa_path = dir_analises / f"mapa_manual_unificacao_{cnpj_limpo}.parquet"
-        
+
         df_novo = pl.DataFrame(req.itens_decididos)
-        
+
         if mapa_path.exists():
             df_existente = pl.read_parquet(str(mapa_path))
             df_merge = pl.concat([df_existente, df_novo], how="diagonal_relaxed").unique(
-                subset=["fonte", "codigo_original", "descricao_original"], 
+                subset=["fonte", "codigo_original", "descricao_original"],
                 keep="last"
             )
             df_merge.write_parquet(mapa_path)
         else:
             df_novo.write_parquet(mapa_path)
-            
+
         logger.info(f"Desagregação gravada com sucesso no arquivo {mapa_path.name}")
-        
+
         unificar_produtos_unidades(cnpj_limpo)
-        
+
         return {"status": "sucesso", "mensagem": "Desagregação aplicada com sucesso. A tabela foi atualizada."}
     except Exception as e:
         logger.error("[resolver_manual_desagregar] Erro: %s\n%s", e, traceback.format_exc())
@@ -799,7 +796,7 @@ async def extract_oracle_data(request: ExtractionRequest):
         from db_manager import DatabaseManager
         dsn = oracledb.makedsn(request.connection.host, request.connection.port, service_name=request.connection.service)
         db_manager = DatabaseManager(dsn=dsn, user=request.connection.user, password=request.connection.password)
-        
+
         with db_manager.get_connection() as conexao:
             for query_path in request.queries:
                 query_file = Path(query_path)
@@ -824,7 +821,7 @@ async def extract_oracle_data(request: ExtractionRequest):
                                 val = request.parameters[p.lower()]
                             elif p.upper() in request.parameters:
                                 val = request.parameters[p.upper()]
-                            
+
                             if val is not None:
                                 bind_vars[p] = val
 
@@ -889,7 +886,7 @@ async def extract_oracle_data(request: ExtractionRequest):
                                         val = request.parameters[p.lower()]
                                     elif p.upper() in request.parameters:
                                         val = request.parameters[p.upper()]
-                                    
+
                                     if val is not None:
                                         aux_bind[p] = val
 
@@ -957,7 +954,7 @@ async def save_oracle_credentials(config: OracleConnectionConfig):
         # Apenas re-escreve o .env se o usuario mudou (evita Vite hot-reload disparar refresh)
         if saved_user != config.user.strip().strip("'").strip('"'):
             set_key(str(env_path), "SAVED_ORACLE_USER", config.user)
-            
+
         keyring.set_password("sefin_audit_tool", config.user, config.password)
         return {"success": True, "message": "Credenciais salvas com sucesso no Cofre do Windows"}
     except Exception as e:
@@ -1155,35 +1152,35 @@ async def merge_parquet_files(request: ParquetMergeRequest):
     try:
         path_a = Path(request.file_a)
         path_b = Path(request.file_b)
-        
+
         if not path_a.exists() or not path_b.exists():
             raise HTTPException(status_code=404, detail="Um ou ambos os arquivos não existem.")
-            
+
         df_a = pl.read_parquet(path_a)
         df_b = pl.read_parquet(path_b)
-        
+
         # Filtro de colunas se especificado
         if request.columns_a:
             # Garantir que as chaves de join estão incluídas
             cols_a = list(set(request.columns_a) | set(request.on))
             df_a = df_a.select(cols_a)
-            
+
         if request.columns_b:
             cols_b = list(set(request.columns_b) | set(request.on))
             df_b = df_b.select(cols_b)
-            
+
         # Executar merge
         df_result = df_a.join(df_b, on=request.on, how=request.how)
-        
+
         # Salvar resultado
         out_dir = Path(request.output_dir) if request.output_dir else _CRUZAMENTOS_DIR
         out_dir.mkdir(parents=True, exist_ok=True)
-        
+
         output_path = out_dir / (request.output_name if request.output_name.endswith(".parquet") else f"{request.output_name}.parquet")
         df_result.write_parquet(output_path)
-        
+
         return {
-            "success": True, 
+            "success": True,
             "message": f"Merge concluído: {len(df_result)} linhas geradas.",
             "file_path": str(output_path),
             "rows": len(df_result),
@@ -1419,22 +1416,22 @@ async def export_excel_download(file_path: str = Query(...)):
         import tempfile
         import shutil
         import pandas as pd
-        
+
         df = pl.read_parquet(str(source))
         pdf = df.to_pandas()
-        
+
         # Usa arquivo temporário pois xlsxwriter não funciona bem com BytesIO
         with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp_file:
             tmp_path = tmp_file.name
-        
+
         try:
             with pd.ExcelWriter(tmp_path, engine="xlsxwriter") as writer:
                 _write_excel_with_format(pdf, writer)
-            
+
             # Lê arquivo temporário e retorna como stream
             with open(tmp_path, "rb") as f:
                 buffer = BytesIO(f.read())
-            
+
             buffer.seek(0)
             filename = source.stem + ".xlsx"
             return StreamingResponse(
@@ -1775,13 +1772,13 @@ async def gerar_fisconforme(request: FisconformeRequest):
         conexao = oracledb.connect(user=saved_user, password=saved_password, dsn=dsn)
         with conexao.cursor() as cursor:
             cursor.execute("ALTER SESSION SET NLS_NUMERIC_CHARACTERS = '.,'")
-            
+
             # Executar dados_cadastrais.sql
             sql_file = _PROJETO_DIR / "consultas_fonte" / "dados_cadastrais.sql"
             if not sql_file.exists():
                 raise HTTPException(status_code=404, detail=f"Arquivo não encontrado: {sql_file}")
             sql = ler_sql(sql_file)
-            
+
             cursor.execute(sql, {"CNPJ": cnpj_limpo})
             columns = [desc[0] for desc in cursor.description]
             row = cursor.fetchone()
@@ -1791,7 +1788,7 @@ async def gerar_fisconforme(request: FisconformeRequest):
     finally:
         if 'conexao' in locals():
             conexao.close()
-            
+
     import importlib.util
     _config_path = _PROJETO_DIR / "config.py"
     _spec = importlib.util.spec_from_file_location("sefin_config", str(_config_path))
@@ -1800,7 +1797,7 @@ async def gerar_fisconforme(request: FisconformeRequest):
     obter_diretorios_cnpj = _sefin_config.obter_diretorios_cnpj
     _, _, dir_relatorios = obter_diretorios_cnpj(cnpj_limpo)
     dir_modelos = _PROJETO_DIR / "modelos"
-    
+
     from gerar_relatorio import gerar_relatorio_fisconforme_html
     result = gerar_relatorio_fisconforme_html(
         cnpj=cnpj_limpo,
@@ -1812,10 +1809,10 @@ async def gerar_fisconforme(request: FisconformeRequest):
         email_auditor=request.email_auditor,
         orgao=request.orgao
     )
-    
+
     if not result:
         raise HTTPException(status_code=500, detail="Erro ao gerar notificação Fisconforme")
-        
+
     return {"success": True, "file": result}
 
 
@@ -2014,37 +2011,37 @@ async def analise_ressarcimento(req: AnaliseRessarcimentoRequest):
         obter_diretorios_cnpj = _sefin_config.obter_diretorios_cnpj
 
         logger.info("[analise_ressarcimento] Iniciando para CNPJ %s", cnpj_limpo)
-        
+
         resultado = executar_cruzamento_c176_completo(cnpj_limpo)
         if resultado.get("status") == "erro":
             raise HTTPException(status_code=400, detail=resultado.get("mensagem", "Erro na execução da análise C176"))
-            
+
         _, dir_analises, _ = obter_diretorios_cnpj(cnpj_limpo)
-        
+
         arquivos_gerados = []
         caminho_principal = dir_analises / f"cruzamento_c176_completo_{cnpj_limpo}.parquet"
         caminho_resumo = dir_analises / f"resumo_mensal_c176_{cnpj_limpo}.parquet"
-        
+
         total_rows = 0
         total_columns = 0
-        
+
         if caminho_principal.exists():
             df_principal = pl.scan_parquet(str(caminho_principal))
             total_rows = df_principal.select(pl.len()).collect().item()
             total_columns = len(df_principal.columns)
             arquivos_gerados.append({
-                "name": caminho_principal.name, 
-                "path": str(caminho_principal), 
-                "rows": total_rows, 
+                "name": caminho_principal.name,
+                "path": str(caminho_principal),
+                "rows": total_rows,
                 "columns": total_columns
             })
-            
+
         if caminho_resumo.exists():
             df_resumo = pl.scan_parquet(str(caminho_resumo))
             arquivos_gerados.append({
-                "name": caminho_resumo.name, 
-                "path": str(caminho_resumo), 
-                "rows": df_resumo.select(pl.len()).collect().item(), 
+                "name": caminho_resumo.name,
+                "path": str(caminho_resumo),
+                "rows": df_resumo.select(pl.len()).collect().item(),
                 "columns": len(df_resumo.columns)
             })
 
@@ -2182,13 +2179,13 @@ async def analise_cruzamento_c176_completo(req: AnaliseCruzamentoC176Request):
         raise HTTPException(status_code=400, detail="CNPJ inválido")
     try:
         from cruzamentos.analise_cruzamento_c176 import executar_cruzamento_c176_completo
-        
+
         logger.info("[cruzamento_c176_completo] Iniciando para CNPJ %s", cnpj_limpo)
         resultado = executar_cruzamento_c176_completo(cnpj_limpo)
-        
+
         if resultado.get("status") == "erro":
             raise HTTPException(status_code=400, detail=resultado.get("mensagem", "Erro desconhecido na análise"))
-            
+
         import importlib.util
         _config_path = _PROJETO_DIR / "config.py"
         _spec = importlib.util.spec_from_file_location("sefin_config_local", str(_config_path))
@@ -2196,37 +2193,37 @@ async def analise_cruzamento_c176_completo(req: AnaliseCruzamentoC176Request):
         _spec.loader.exec_module(_sefin_config)
         obter_diretorios_cnpj = _sefin_config.obter_diretorios_cnpj
         _, dir_analises, _ = obter_diretorios_cnpj(cnpj_limpo)
-        
+
         # O módulo gera os arquivos na pasta dir_analises. Vamos pegar os gerados.
         caminho_principal = dir_analises / f"cruzamento_c176_completo_{cnpj_limpo}.parquet"
         caminho_resumo = dir_analises / f"resumo_mensal_c176_{cnpj_limpo}.parquet"
-        
+
         arquivos_gerados = []
         if caminho_principal.exists():
             df_principal = pl.scan_parquet(str(caminho_principal))
             arquivos_gerados.append({
-                "name": caminho_principal.name, 
-                "path": str(caminho_principal), 
-                "rows": df_principal.select(pl.len()).collect().item(), 
+                "name": caminho_principal.name,
+                "path": str(caminho_principal),
+                "rows": df_principal.select(pl.len()).collect().item(),
                 "columns": len(df_principal.columns)
             })
-            
+
         if caminho_resumo.exists():
             df_resumo = pl.scan_parquet(str(caminho_resumo))
             arquivos_gerados.append({
-                "name": caminho_resumo.name, 
-                "path": str(caminho_resumo), 
-                "rows": df_resumo.select(pl.len()).collect().item(), 
+                "name": caminho_resumo.name,
+                "path": str(caminho_resumo),
+                "rows": df_resumo.select(pl.len()).collect().item(),
                 "columns": len(df_resumo.columns)
             })
-            
+
         return {
             "success": True,
             "cnpj": cnpj_limpo,
             "output_dir": str(dir_analises),
             "files": arquivos_gerados
         }
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -2296,10 +2293,10 @@ async def listar_consultas_disponiveis():
 
         if not DIR_SQL.exists():
             return {"success": True, "consultas": []}
-            
+
         sql_files = sorted(DIR_SQL.glob("*.sql"))
         consultas = [{"id": f.name, "nome": f.stem} for f in sql_files]
-        
+
         return {
             "success": True,
             "consultas": consultas
@@ -2324,7 +2321,7 @@ async def audit_pipeline(req: AuditPipelineRequest, background_tasks: Background
     cnpj_limpo = re.sub(r"[^0-9]", "", req.cnpj)
     if not cnpj_limpo or not validar_cnpj(cnpj_limpo):
         raise HTTPException(status_code=400, detail="CNPJ inválido")
-    
+
     import importlib.util
     _config_path = _PROJETO_DIR / "config.py"
     _spec = importlib.util.spec_from_file_location("sefin_config", str(_config_path))
@@ -2335,7 +2332,7 @@ async def audit_pipeline(req: AuditPipelineRequest, background_tasks: Background
 
     background_tasks.add_task(run_audit_pipeline_bg, req, cnpj_limpo)
     return {
-        "success": True, 
+        "success": True,
         "message": "Auditoria iniciada em segundo plano. Acompanhe na aba de progresso.",
         "cnpj": cnpj_limpo,
         "dir_parquet": str(dir_parquet),
@@ -2404,14 +2401,14 @@ async def run_audit_pipeline_bg(req: AuditPipelineRequest, cnpj_limpo: str):
 
         # Skip subdirectories by checking if parent is exactly DIR_SQL
         root_sql_files = [f for f in sql_files if f.is_file()]
-        
+
         total_queries = len(root_sql_files)
         for i, sql_file in enumerate(root_sql_files):
             query_name = sql_file.stem
             event_manager.broadcast({
-                "type": "progress", 
-                "cnpj": cnpj_limpo, 
-                "step": "extraindo", 
+                "type": "progress",
+                "cnpj": cnpj_limpo,
+                "step": "extraindo",
                 "message": f"Extraindo {query_name} ({i+1}/{total_queries})...",
                 "percent": int(((i+1)/total_queries) * 100)
             })
@@ -2419,7 +2416,7 @@ async def run_audit_pipeline_bg(req: AuditPipelineRequest, cnpj_limpo: str):
                 sql = ler_sql(sql_file)
                 params = extrair_parametros_sql(sql)
                 bind_vars: dict[str, Any] = {p: None for p in params}
-                
+
                 if cnpj_limpo:
                     for p in params:
                         if p.lower() == "cnpj":
@@ -2432,7 +2429,7 @@ async def run_audit_pipeline_bg(req: AuditPipelineRequest, cnpj_limpo: str):
                     val = None
                     if req.data_limite_processamento and p.lower() == "data_limite_processamento":
                         val = req.data_limite_processamento
-                        
+
                     if val is not None:
                         bind_vars[p] = val
 
@@ -2489,10 +2486,10 @@ async def run_audit_pipeline_bg(req: AuditPipelineRequest, cnpj_limpo: str):
                 if caminho_principal.exists():
                     df_principal = pl.scan_parquet(str(caminho_principal))
                     arquivos_analises.append({
-                        "name": caminho_principal.name, 
-                        "path": str(caminho_principal), 
-                        "rows": df_principal.select(pl.len()).collect().item(), 
-                        "columns": len(df_principal.columns), 
+                        "name": caminho_principal.name,
+                        "path": str(caminho_principal),
+                        "rows": df_principal.select(pl.len()).collect().item(),
+                        "columns": len(df_principal.columns),
                         "analise": "Ressarcimento C176"
                     })
                 analises_executadas.append({"nome": "Ressarcimento C176", "status": "sucesso"})
@@ -2589,7 +2586,7 @@ async def processar_lote_auditoria(request: LoteCNPJRequest, background_tasks: B
     """
     if not request.cnpjs:
         raise HTTPException(status_code=400, detail="Lista de CNPJs vazia.")
-    
+
     background_tasks.add_task(run_lote_auditoria_bg, request)
     return {"success": True, "message": "Processamento em lote iniciado. Acompanhe na aba de progresso."}
 
@@ -2600,7 +2597,7 @@ async def processar_lote_auditoria(request: LoteCNPJRequest, background_tasks: B
     """
     if not request.cnpjs:
         raise HTTPException(status_code=400, detail="Lista de CNPJs vazia.")
-    
+
     background_tasks.add_task(run_lote_auditoria_bg, request)
     return {"success": True, "message": "Processamento em lote iniciado. Acompanhe na aba de progresso."}
 
@@ -2656,24 +2653,24 @@ async def run_lote_auditoria_bg(request: LoteCNPJRequest):
         _spec.loader.exec_module(_sefin_config)
         obter_diretorios_cnpj = _sefin_config.obter_diretorios_cnpj
         DIR_SQL = _sefin_config.DIR_SQL
-        
+
         from gerar_relatorio import gerar_relatorio_fisconforme_html
         dir_modelos = _PROJETO_DIR / "modelos"
 
         resultados_lote = []
-        
+
         for idx, cnpj in enumerate(cnpjs_validos):
             event_manager.broadcast({
-                "type": "progress", 
-                "cnpj": cnpj, 
-                "step": "lote", 
+                "type": "progress",
+                "cnpj": cnpj,
+                "step": "lote",
                 "message": f"Processando CNPJ {cnpj} ({idx+1}/{total_cnpjs})...",
                 "percent": int(((idx+1)/total_cnpjs) * 100)
             })
-            
+
             resultado_cnpj = {"cnpj": cnpj, "sucesso": True, "arquivos": [], "erros": []}
             dir_parquet, dir_analises, dir_relatorios = obter_diretorios_cnpj(cnpj)
-            
+
             dados_cadastrais = {}
             df_fisconforme_malha = None
 
@@ -2685,7 +2682,7 @@ async def run_lote_auditoria_bg(request: LoteCNPJRequest):
                 if not sql_file.exists():
                      resultado_cnpj["erros"].append(f"Consulta '{query_filename}' não encontrada.")
                      continue
-                
+
                 try:
                     sql = ler_sql(sql_file)
                     params = extrair_parametros_sql(sql)
@@ -2695,25 +2692,25 @@ async def run_lote_auditoria_bg(request: LoteCNPJRequest):
                         elif p.lower() == "cnpj_raiz": bind_vars[p] = cnpj[:8]
                         elif p.lower() == "data_limite_processamento": bind_vars[p] = request.data_limite_processamento or ""
                         else: bind_vars[p] = ""
-                    
+
                     with conexao.cursor() as cursor:
                         cursor.execute(sql, bind_vars)
                         columns = [desc[0] for desc in cursor.description]
                         rows = cursor.fetchall()
-                        
+
                     if query_name.lower() == "dados_cadastrais" and rows:
                          dados_cadastrais = dict(zip(columns, rows[0]))
-                    
+
                     df = pl.DataFrame({col: [row[i] for row in rows] for i, col in enumerate(columns)}, strict=False)
                     df = normalizar_colunas(df)
-                    
+
                     if query_name.lower() == "fisconforme_malha_cnpj":
                         df_fisconforme_malha = df
-                    
+
                     parquet_name = f"{query_name}_{cnpj}.parquet"
                     parquet_path = dir_parquet / parquet_name
                     df.write_parquet(str(parquet_path))
-                    
+
                     resultado_cnpj["arquivos"].append(parquet_name)
                     if request.gerar_excel:
                         if query_name.lower() == "fisconforme_malha_cnpj":
@@ -2727,7 +2724,7 @@ async def run_lote_auditoria_bg(request: LoteCNPJRequest):
                                 resultado_cnpj["erros"].append(f"Erro ao gerar Excel p/ {query_name}: {str(e)}")
                         else:
                             df_list_for_excel.append((query_name, df))
-                        
+
                 except Exception as e:
                     resultado_cnpj["erros"].append(f"Erro em {query_name}: {str(e)}")
                     resultado_cnpj["sucesso"] = False
@@ -2775,7 +2772,7 @@ async def run_lote_auditoria_bg(request: LoteCNPJRequest):
                     resultado_cnpj["erros"].append(f"Erro ao criar ZIP: {str(e)}")
 
             resultados_lote.append(resultado_cnpj)
-            
+
         conexao.close()
         event_manager.broadcast({"type": "batch_finish", "results": resultados_lote})
 
@@ -2820,27 +2817,27 @@ async def api_get_detalhes_codigo(cnpj: str, codigo: str):
     _sefin_config = importlib.util.module_from_spec(_spec)
     _spec.loader.exec_module(_sefin_config)
     obter_diretorios_cnpj = _sefin_config.obter_diretorios_cnpj
-    
+
     _, dir_analises, _ = obter_diretorios_cnpj(cnpj_limpo)
     base_path = dir_analises / f"base_detalhes_produtos_{cnpj_limpo}.parquet"
-    
+
     if not base_path.exists():
         # Fallback para o antigo se por acaso não rodaram a nova versão ainda
         base_path = dir_analises / f"base_processada_{cnpj_limpo}.parquet"
         if not base_path.exists():
             raise HTTPException(status_code=404, detail="Base processada (detalhes) não encontrada. Execute a unificação novamente.")
-            
+
     df = pl.read_parquet(str(base_path))
-    
+
     # Dependendo da versão do script (novo ou legado), a coluna de código original pode variar
     col_codigo = "codigo" if "codigo" in df.columns else "codigo_original"
-    
+
     res = df.filter(pl.col(col_codigo) == str(codigo))
-    
+
     # Ordenar priorizando fontes mais confiáveis ou antigas (0200 primeiro)
     if "fonte" in res.columns:
         res = res.sort("fonte")
-    
+
     return {
         "success": True,
         "codigo": codigo,
@@ -2869,11 +2866,11 @@ async def listar_historico():
                 dir_parquet = d / "arquivos_parquet"
                 dir_analises = d / "analises"
                 dir_relatorios = d / "relatorios"
-                
+
                 qtd_parquets = len(list(dir_parquet.glob("*.parquet"))) if dir_parquet.exists() else 0
                 qtd_analises = len(list(dir_analises.glob("*.parquet"))) if dir_analises.exists() else 0
                 qtd_relatorios = len([f for f in (dir_relatorios.iterdir() if dir_relatorios.exists() else []) if f.is_file()])
-                
+
                 # Get last modified time of any file inside
                 last_mod = 0
                 for subdir in [dir_parquet, dir_analises, dir_relatorios]:
@@ -2883,9 +2880,9 @@ async def listar_historico():
                                 mtime = f.stat().st_mtime
                                 if mtime > last_mod:
                                     last_mod = mtime
-                
+
                 dt_mod = datetime.fromtimestamp(last_mod).isoformat() if last_mod > 0 else None
-                
+
                 razao_social = None
                 if dir_parquet.exists():
                     cadastrais_file = dir_parquet / f"dados_cadastrais_{cnpj}.parquet"
@@ -2960,12 +2957,12 @@ async def detalhes_historico(cnpj: str):
                 df = pl.scan_parquet(str(f))
                 rows = df.select(pl.len()).collect().item()
                 cols = len(df.collect_schema())
-                
+
                 analise_nome = ""
                 if "ressarcimento" in f.name: analise_nome = "Ressarcimento C176"
                 elif "resumo_mensal" in f.name: analise_nome = "Resumo Mensal C176"
                 elif "omissao" in f.name: analise_nome = "Omissão de Saída"
-                
+
                 arquivos_analises.append({
                     "name": f.name,
                     "path": str(f),
