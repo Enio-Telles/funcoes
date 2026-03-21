@@ -40,6 +40,14 @@ from fiscal_app.services.pipeline_funcoes_service import ResultadoPipeline, Serv
 from fiscal_app.services.query_worker import QueryWorker
 from fiscal_app.services.registry_service import RegistryService
 from fiscal_app.services.sql_service import SqlService
+from fiscal_app.ui.aggregation_helpers import (
+    execute_aggregation,
+    open_editable_aggregation_table,
+    recalculate_aggregation_defaults,
+    recalculate_aggregation_totals,
+    reload_aggregation_history,
+    update_aggregation_tables,
+)
 from fiscal_app.ui.conversion_helpers import export_conversion_excel, import_conversion_excel, load_conversion_table
 from fiscal_app.ui.dialogs import ColumnSelectorDialog, DialogoSelecaoConsultas, DialogoSelecaoTabelas
 from fiscal_app.ui.export_helpers import (
@@ -729,38 +737,10 @@ class MainWindow(QMainWindow):
         export_txt_html(self)
 
     def open_editable_aggregation_table(self) -> None:
-        if not self.state.current_cnpj:
-            self.show_error("CNPJ não selecionado", "Selecione um CNPJ na lista."); return
-        try:
-            target = self.servico_agregacao.carregar_tabela_editavel(self.state.current_cnpj)
-            df = pl.read_parquet(target)
-            self.state.all_columns = df.columns
-            self.aggregation_table_model.set_dataframe(df)
-            self.aggregation_table_view.resizeColumnsToContents()
-        except Exception as exc:
-            self.show_error("Falha ao abrir tabela editável", str(exc)); return
-        self.state.current_file = target; self.state.current_page = 1; self.state.filters = []
-        self.tabs.setCurrentIndex(2)
+        open_editable_aggregation_table(self)
 
     def execute_aggregation(self) -> None:
-        if not self.state.current_cnpj:
-            self.show_error("CNPJ não selecionado", "Selecione um CNPJ antes de agregar."); return
-        rows_top = self.aggregation_table_model.get_checked_rows(); rows_bottom = self.results_table_model.get_checked_rows()
-        combined = []; seen = set()
-        for r in (rows_top + rows_bottom):
-            key = (str(r.get("descrição_normalizada") or ""), str(r.get("descricao") or ""))
-            if key not in seen:
-                seen.add(key); combined.append(r)
-        if len(combined) < 2:
-            self.show_error("Seleção insuficiente", "Marque pelo menos duas linhas com 'Visto' (pode ser em ambas as tabelas) para agregar."); return
-        try:
-            result = self.servico_agregacao.agregar_linhas(cnpj=self.state.current_cnpj, linhas_selecionadas=combined)
-            self.atualizar_tabelas_agregacao(); self.recarregar_historico_agregacao(self.state.current_cnpj)
-            self.show_info("Agregação concluída", f"As {len(combined)} descrições foram unificadas em:\n'{result.linha_agregada['descricao']}'")
-        except Exception as e:
-            import traceback; traceback.print_exc()
-            self.show_error("Erro na agregação", f"Ocorreu um erro ao agregar: {e}")
-            self.aggregation_table_model.clear_checked(); self.results_table_model.clear_checked(); self.open_editable_aggregation_table()
+        execute_aggregation(self)
 
     def apply_quick_filters(self) -> None:
         idx = self.tabs.currentIndex()
@@ -818,47 +798,16 @@ class MainWindow(QMainWindow):
         import_conversion_excel(self)
 
     def recalcular_padroes_agregacao(self) -> None:
-        cnpj = self.state.current_cnpj
-        if not cnpj: return
-        ret = QMessageBox.question(self, "Recalcular Padrões", "Isso irá atualizar NCM, CEST, GTIN, UNID e SEFIN de TODOS os grupos baseando-se na moda dos itens originais.\nProsseguir?", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-        if ret == QMessageBox.StandardButton.No: return
-        try:
-            ok = self.servico_agregacao.recalcular_todos_padroes(cnpj)
-            if ok:
-                self.atualizar_tabelas_agregacao(); QMessageBox.information(self, "Sucesso", "Valores padrão recalculados com sucesso para toda a tabela.")
-            else:
-                QMessageBox.warning(self, "Aviso", "Não foi possível recalcular. Verifique se as tabelas existem.")
-        except Exception as e:
-            QMessageBox.critical(self, "Erro", f"Erro ao recalcular: {e}")
+        recalculate_aggregation_defaults(self)
 
     def recalcular_totais_agregacao(self) -> None:
-        cnpj = self.state.current_cnpj
-        if not cnpj: return
-        ret = QMessageBox.question(self, "Recalcular Totais", "Isso irá calcular os totais de Entrada (C170) e Saída (NFe) para todos os produtos (apenas operações mercantis).\nProsseguir?", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-        if ret == QMessageBox.StandardButton.No: return
-        self.status.showMessage("Calculando totais de valores...")
-        try:
-            ok = self.servico_agregacao.recalcular_valores_totais(cnpj)
-            if ok:
-                self.atualizar_tabelas_agregacao(); QMessageBox.information(self, "Sucesso", "Totais de valores recalculados com sucesso.")
-            else:
-                QMessageBox.warning(self, "Aviso", "Não foi possível recalcular os totais.")
-        except Exception as e:
-            QMessageBox.critical(self, "Erro", f"Erro ao recalcular totais: {e}")
-        finally:
-            self.status.showMessage("Pronto.")
+        recalculate_aggregation_totals(self)
 
     def recarregar_historico_agregacao(self, cnpj: str) -> None:
-        historico = self.servico_agregacao.ler_linhas_log(cnpj=cnpj)
-        self.results_table_model.set_dataframe(pl.DataFrame(historico)); self.results_table_view.resizeColumnsToContents()
+        reload_aggregation_history(self, cnpj)
 
     def atualizar_tabelas_agregacao(self) -> None:
-        cnpj = self.state.current_cnpj
-        if not cnpj: return
-        path = self.servico_agregacao.caminho_tabela_editavel(cnpj)
-        if path.exists():
-            df = pl.read_parquet(path)
-            self.aggregation_table_model.set_dataframe(df); self.aggregation_table_view.resizeColumnsToContents()
+        update_aggregation_tables(self)
 
     def _arquivos_rastreabilidade(self) -> dict[str, Path]:
         return traceability_files(self.state.current_cnpj)
