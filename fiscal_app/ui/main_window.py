@@ -28,7 +28,6 @@ from PySide6.QtWidgets import (
     QTabWidget,
     QTableView,
     QTreeWidget,
-    QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -44,6 +43,15 @@ from fiscal_app.services.registry_service import RegistryService
 from fiscal_app.services.sql_service import SqlService
 from fiscal_app.ui.conversion_helpers import export_conversion_excel, import_conversion_excel, load_conversion_table
 from fiscal_app.ui.dialogs import ColumnSelectorDialog, DialogoSelecaoConsultas, DialogoSelecaoTabelas
+from fiscal_app.ui.file_navigation_helpers import (
+    load_current_file,
+    on_file_activated,
+    refresh_file_tree,
+    reload_table,
+    refresh_filter_list_widget,
+    update_context_label,
+    update_page_label,
+)
 from fiscal_app.ui.sql_helpers import (
     clear_param_form,
     collect_param_values,
@@ -640,70 +648,22 @@ class MainWindow(QMainWindow):
         self.limpar_rastreabilidade()
 
     def refresh_file_tree(self, cnpj: str) -> None:
-        self.file_tree.clear()
-        root_path = self.parquet_service.cnpj_dir(cnpj)
-        cat_brutas = QTreeWidgetItem(["Tabelas brutas (SQL)", str(root_path / "arquivos_parquet")])
-        cat_analises = QTreeWidgetItem(["Análises de Produtos", str(root_path / "analises" / "produtos")])
-        cat_outros = QTreeWidgetItem(["Outros Parquets", str(root_path)])
-        self.file_tree.addTopLevelItem(cat_brutas); self.file_tree.addTopLevelItem(cat_analises); self.file_tree.addTopLevelItem(cat_outros)
-        first_leaf: QTreeWidgetItem | None = None
-        for path in self.parquet_service.list_parquet_files(cnpj):
-            parent = cat_brutas if "arquivos_parquet" in str(path.parent) else cat_analises if ("analises" in str(path.parent) or "produtos" in str(path.parent)) else cat_outros
-            item = QTreeWidgetItem([path.name, str(path.parent)])
-            item.setData(0, Qt.UserRole, str(path))
-            parent.addChild(item)
-            if first_leaf is None: first_leaf = item
-        cat_brutas.setExpanded(True); cat_analises.setExpanded(True)
-        for cat in [cat_brutas, cat_analises, cat_outros]:
-            if cat.childCount() == 0:
-                self.file_tree.takeTopLevelItem(self.file_tree.indexOfTopLevelItem(cat))
-        if first_leaf is not None:
-            self.file_tree.setCurrentItem(first_leaf); self.on_file_activated(first_leaf, 0)
+        refresh_file_tree(self, cnpj)
 
-    def on_file_activated(self, item: QTreeWidgetItem, _column: int) -> None:
-        raw_path = item.data(0, Qt.UserRole)
-        if not raw_path: return
-        self.state.current_file = Path(raw_path)
-        self.state.current_page = 1
-        self.state.filters = []
-        self.current_page_df_all = pl.DataFrame(); self.current_page_df_visible = pl.DataFrame()
-        self.load_current_file(reset_columns=True)
-        self.tabs.setCurrentIndex(0)
+    def on_file_activated(self, item, column: int) -> None:
+        on_file_activated(self, item, column)
 
     def load_current_file(self, reset_columns: bool = False) -> None:
-        if self.state.current_file is None: return
-        try:
-            all_columns = self.parquet_service.get_schema(self.state.current_file)
-        except Exception as exc:
-            self.show_error("Erro ao abrir Parquet", str(exc)); return
-        self.state.all_columns = all_columns
-        if reset_columns or not self.state.visible_columns:
-            self.state.visible_columns = all_columns[:]
-        self.filter_column.clear(); self.filter_column.addItems(all_columns)
-        self.reload_table()
+        load_current_file(self, reset_columns)
 
     def reload_table(self, update_main_view: bool = True) -> None:
-        if self.state.current_file is None: return
-        try:
-            page_result = self.parquet_service.get_page(self.state.current_file, self.state.filters or [], self.state.visible_columns or [], self.state.current_page, self.state.page_size)
-            self.state.total_rows = page_result.total_rows
-            self.current_page_df_all = page_result.df_all_columns
-            self.current_page_df_visible = page_result.df_visible
-            if update_main_view:
-                self.table_model.set_dataframe(self.current_page_df_visible)
-                self._update_page_label(); self._update_context_label(); self._refresh_filter_list_widget(); self.table_view.resizeColumnsToContents()
-        except Exception as exc:
-            self.show_error("Erro ao carregar dados", str(exc))
+        reload_table(self, update_main_view)
 
     def _update_page_label(self) -> None:
-        total_pages = max(1, ((self.state.total_rows - 1) // self.state.page_size) + 1 if self.state.total_rows else 1)
-        if self.state.current_page > total_pages: self.state.current_page = total_pages
-        self.lbl_page.setText(f"Página {self.state.current_page}/{total_pages} | Linhas filtradas: {self.state.total_rows}")
+        update_page_label(self)
 
     def _update_context_label(self) -> None:
-        if self.state.current_file is None:
-            self.lbl_context.setText("Nenhum arquivo selecionado"); return
-        self.lbl_context.setText(f"CNPJ: {self.state.current_cnpj or '-'} | Arquivo: {self.state.current_file.name} | Colunas visíveis: {len(self.state.visible_columns or [])}/{len(self.state.all_columns or [])}")
+        update_context_label(self)
 
     def add_filter_from_form(self) -> None:
         column = self.filter_column.currentText().strip(); operator = self.filter_operator.currentText().strip(); value = self.filter_value.text().strip()
@@ -723,9 +683,7 @@ class MainWindow(QMainWindow):
         self.state.filters.pop(row); self.state.current_page = 1; self.reload_table()
 
     def _refresh_filter_list_widget(self) -> None:
-        self.filter_list.clear()
-        for cond in self.state.filters or []:
-            self.filter_list.addItem(f"{cond.column} {cond.operator} {cond.value}".strip())
+        refresh_filter_list_widget(self)
 
     def choose_columns(self) -> None:
         if not self.state.all_columns: return
