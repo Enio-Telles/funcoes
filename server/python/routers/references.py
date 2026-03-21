@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import polars as pl
 import re
@@ -24,7 +25,7 @@ async def get_ncm_details(codigo: str):
 
     try:
         codigo_limpo = re.sub(r"[^0-9]", "", codigo)
-        df = pl.read_parquet(str(ncm_path))
+        df = await asyncio.to_thread(pl.read_parquet, str(ncm_path))
 
         cols = df.columns
 
@@ -70,7 +71,7 @@ async def get_ncm_details(codigo: str):
 
         if is_invalid(descr_capitulo) and ncm_capitulos_path.exists():
             try:
-                df_cap = pl.read_parquet(str(ncm_capitulos_path)).with_columns(
+                df_cap = (await asyncio.to_thread(pl.read_parquet, str(ncm_capitulos_path))).with_columns(
                     pl.col("NCM").cast(pl.Utf8).fill_null("").str.replace_all(r"[^0-9]", "").alias("__cap_norm")
                 )
                 cap_res = df_cap.filter(pl.col("__cap_norm") == ncm_val[:2]).head(1)
@@ -116,7 +117,7 @@ async def get_ncm_details(codigo: str):
 
             if is_invalid(descr_posicao) and ncm_posicao_path.exists():
                 try:
-                    df_pos = pl.read_parquet(str(ncm_posicao_path)).with_columns(
+                    df_pos = (await asyncio.to_thread(pl.read_parquet, str(ncm_posicao_path))).with_columns(
                         pl.col("NCM").cast(pl.Utf8).fill_null("").str.replace_all(r"[^0-9]", "").alias("__pos_norm")
                     )
                     pos_ref = df_pos.filter(pl.col("__pos_norm") == pos_prefix).head(1)
@@ -165,7 +166,7 @@ async def get_cest_details(codigo: str):
     
     try:
         codigo_limpo = re.sub(r"[^0-9]", "", codigo)
-        df_cest = pl.read_parquet(str(cest_path))
+        df_cest = await asyncio.to_thread(pl.read_parquet, str(cest_path))
         
         # Filtra pelo CEST (normalizando a coluna na comparação)
         res_cest = df_cest.filter(pl.col("CEST").str.replace_all(r"[^0-9]", "") == codigo_limpo)
@@ -188,7 +189,7 @@ async def get_cest_details(codigo: str):
         # Busca nome do segmento
         segmento_nome = "Não localizado"
         if seg_path.exists():
-            df_seg = pl.read_parquet(str(seg_path))
+            df_seg = await asyncio.to_thread(pl.read_parquet, str(seg_path))
             res_seg = df_seg.filter(pl.col("Codigo_Segmento") == segmento_id)
             if not res_seg.is_empty():
                 segmento_nome = res_seg.row(0, named=True).get("Nome_Segmento", "Não localizado")
@@ -205,7 +206,7 @@ async def get_cest_details(codigo: str):
                 ncm_pos_query = re.sub(r"[^0-9]", "", ncm_associado)[:4]
                 ncm_ref_path = _REF_DIR / "NCM" / "tabela_ncm.parquet"
                 if ncm_ref_path.exists():
-                    df_ncm = pl.read_parquet(str(ncm_ref_path))
+                    df_ncm = await asyncio.to_thread(pl.read_parquet, str(ncm_ref_path))
                     # Busca a posição normalizando a coluna Posicao
                     pos_row = df_ncm.filter(pl.col("Posicao").str.replace_all(r"[^0-9]", "") == ncm_pos_query).head(1)
                     if not pos_row.is_empty():
